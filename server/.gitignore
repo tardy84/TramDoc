@@ -1,0 +1,15 @@
+node_modules
+.env
+audio/
+uploads/
+*.db
+*.db-journal
+*.out
+*.log
+test_*.ts
+debug_*.ts
+check_api.ts
+cleanMetadata_*.ts
+list_voices.ts
+voices.txt
+output.txt

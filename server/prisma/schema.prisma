@@ -1,0 +1,85 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            Int            @id @default(autoincrement())
+  email         String         @unique
+  passwordHash  String?        // Nullable for Google-only accounts
+  googleId      String?        @unique
+  name          String?
+  avatarUrl     String?
+  role          String         @default("USER")
+  createdAt     DateTime       @default(now())
+  books         Book[]
+  progress      UserProgress[]
+}
+
+model Book {
+  id              Int            @id @default(autoincrement())
+  title           String
+  author          String?
+  coverUrl        String?
+  coverImagePath  String?        // Path to extracted cover image from EPUB
+  createdAt       DateTime       @default(now())
+  userId          Int?           // Optional for now to maintain migration safety, will enforce later
+  user            User?          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chapters        Chapter[]
+  bookmarks       Bookmark[]
+  userProgress    UserProgress[]
+}
+
+model UserProgress {
+  id           Int      @id @default(autoincrement())
+  userId       Int
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bookId       Int
+  book         Book     @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  chapterIndex Int      @default(0)
+  segmentIndex Int      @default(0)
+  updatedAt    DateTime @updatedAt
+
+  @@unique([userId, bookId])
+}
+
+model Chapter {
+  id                 Int       @id @default(autoincrement())
+  title              String
+  bookId             Int
+  book               Book      @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  segments           TextSegment[]
+  orderIndex         Int       @default(0)
+  isTableOfContents  Boolean   @default(false)  // Flag to mark ToC chapter
+  bookmarks          Bookmark[]
+}
+
+model TextSegment {
+  id          Int       @id @default(autoincrement())
+  content     String
+  startTime   Float?    // Start time in audio file (if consolidated)
+  endTime     Float?    // End time in audio file
+  role        String    // 'narrator', 'male', 'female', 'child'
+  chapterId   Int
+  chapter     Chapter   @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  orderIndex  Int       @default(0)
+  audioUrl    String?   // URL to generated audio for this specific segment (if not consolidated)
+  bookmarks   Bookmark[]
+}
+
+model Bookmark {
+  id          Int      @id @default(autoincrement())
+  bookId      Int
+  book        Book     @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  chapterId   Int
+  chapter     Chapter  @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  segmentId   Int
+  segment     TextSegment @relation(fields: [segmentId], references: [id], onDelete: Cascade)
+  previewText String
+  note        String?
+  createdAt   DateTime @default(now())
+}

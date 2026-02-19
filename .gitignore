@@ -1,0 +1,48 @@
+# Dependencies
+node_modules/
+client/node_modules/
+server/node_modules/
+
+# Production builds
+dist/
+client/dist/
+
+# Env & Secrets
+.env
+server/.env
+*.json
+!package.json
+!tsconfig.json
+!client/package.json
+!server/package.json
+# whitelisted json files are above, no need to whitelist secrets!
+client_secret*.json
+TramDocV1_Backup/
+
+# Data & Assets (Very large)
+server/audio/
+server/uploads/
+server/prisma/dev.db
+server/prisma/dev.db-journal
+
+# Logs
+*.log
+*.out
+server/*.out
+server/*.log
+client/*.log
+
+# OS Junk
+.DS_Store
+Thumbs.db
+
+# Test/Debug files
+server/check_api.ts
+server/debug_*.ts
+server/test_*.ts
+server/cleanMetadata_*.ts
+server/list_voices.ts
+server/output.txt
+server/voices.txt
+response*.json
+nohup_*.out
