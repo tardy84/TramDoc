@@ -2,9 +2,16 @@
 @tailwind components;
 @tailwind utilities;
 
+.paper-texture {
+  background-image: url("https://www.transparenttextures.com/patterns/papyrus.png");
+  background-repeat: repeat;
+}
+
 @layer base {
   body {
     font-family: 'Outfit', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
 }
 
@@ -24,6 +31,9 @@
   font-family: 'Bookerly', serif;
 }
 
+.reader-text-shadow {
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.05);
+}
 
 @layer utilities {
 

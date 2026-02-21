@@ -16,42 +16,46 @@ import { useReaderAudio } from './Reader/useReaderAudio';
 import { useReaderProgress } from './Reader/useReaderProgress';
 import { API_BASE_URL } from '../constants';
 
-const THEMES: Record<ThemeMode, { container: string, text: string, card: string, active: string, header: string, btn: string, backBtn: string }> = {
+const THEMES: Record<ThemeMode, { container: string, text: string, card: string, active: string, header: string, btn: string, backBtn: string, paper: string }> = {
     midnight: {
-        container: 'bg-gradient-to-br from-gray-900 via-purple-900 to-gray-900',
-        text: 'text-purple-50',
-        card: 'bg-white/10 border-white/20',
-        active: 'bg-purple-500/30 ring-purple-500/50 text-purple-200',
-        header: 'bg-black/30 border-white/10',
+        container: 'bg-[#0f172a]', // Dark Slate
+        text: 'text-gray-200',
+        card: 'bg-white/5 border-white/10',
+        active: 'bg-indigo-500/20 text-indigo-200 ring-1 ring-indigo-500/30',
+        header: 'bg-[#0f172a]/80 backdrop-blur-xl border-white/5',
         btn: 'bg-white/5 border-white/10 text-white/70 hover:text-white',
-        backBtn: 'bg-white/10 text-white/70 group-hover:bg-white/20'
+        backBtn: 'bg-white/10 text-white/70 group-hover:bg-white/20',
+        paper: 'bg-[#1e293b]'
     },
     sepia: {
-        container: 'bg-[#f4ecd8]',
-        text: 'text-[#5b4636]',
+        container: 'bg-[#f4ecd8]', // Classic Paper
+        text: 'text-[#433429]',
         card: 'bg-[#ebe1c9] border-[#d3c2a3]',
-        active: 'bg-[#d3c2a3] ring-[#bfae8e] text-[#433429]',
-        header: 'bg-[#e7dec3] border-[#d3c2a3]',
+        active: 'bg-[#d3c2a3] text-[#2c1d12] shadow-sm',
+        header: 'bg-[#f4ecd8]/90 backdrop-blur-md border-[#d3c2a3]/50',
         btn: 'bg-[#5b4636]/10 border-[#5b4636]/20 text-[#433429] hover:bg-[#5b4636]/20',
-        backBtn: 'bg-amber-900/10 text-amber-900 group-hover:bg-amber-900/20'
+        backBtn: 'bg-amber-900/10 text-amber-900 group-hover:bg-amber-900/20',
+        paper: 'bg-[#fdf6e3]'
     },
     emerald: {
-        container: 'bg-gradient-to-br from-[#064e3b] via-[#065f46] to-[#047857]',
+        container: 'bg-[#064e3b]',
         text: 'text-emerald-50',
         card: 'bg-white/5 border-white/10',
-        active: 'bg-emerald-400/20 ring-emerald-400/50 text-emerald-200',
-        header: 'bg-black/20 border-white/10',
+        active: 'bg-emerald-400/20 text-emerald-100 ring-1 ring-emerald-400/30',
+        header: 'bg-[#064e3b]/80 backdrop-blur-xl border-white/5',
         btn: 'bg-white/5 border-white/10 text-white/70 hover:text-white',
-        backBtn: 'bg-white/10 text-white/70 group-hover:bg-white/20'
+        backBtn: 'bg-white/10 text-white/70 group-hover:bg-white/20',
+        paper: 'bg-[#065f46]'
     },
     oled: {
         container: 'bg-black',
-        text: 'text-gray-300',
+        text: 'text-zinc-400',
         card: 'bg-zinc-900/50 border-zinc-800',
-        active: 'bg-emerald-500/10 ring-emerald-500/30 text-emerald-400',
-        header: 'bg-black border-zinc-800',
+        active: 'bg-white/10 text-white',
+        header: 'bg-black/80 backdrop-blur-xl border-zinc-800',
         btn: 'bg-zinc-800 border-zinc-700 text-gray-400 hover:text-white',
-        backBtn: 'bg-white/10 text-white/70 group-hover:bg-white/20'
+        backBtn: 'bg-white/10 text-white/70 group-hover:bg-white/20',
+        paper: 'bg-black'
     }
 };
 
@@ -212,9 +216,7 @@ export default function BookReader({ bookId, token, onClose }: BookReaderProps) 
 
     const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
         const currentScrollY = e.currentTarget.scrollTop;
-        if (currentScrollY > lastScrollY.current && currentScrollY > 100) {
-            // Optional: Hide controls on scroll down
-        } else {
+        if (currentScrollY <= 100) {
             setShowControls(true);
         }
         lastScrollY.current = currentScrollY;
@@ -304,6 +306,9 @@ export default function BookReader({ bookId, token, onClose }: BookReaderProps) 
                 setShowLibrary={setShowLibrary}
                 setShowSettings={setShowSettings}
                 handleClose={handleClose}
+                currentSegment={currentChapter?.segments[currentSegmentIndex]}
+                isBookmarked={bookmarks.some(b => b.segmentId === currentChapter?.segments[currentSegmentIndex]?.id)}
+                toggleBookmark={toggleBookmark}
             />
 
             <div
@@ -314,9 +319,6 @@ export default function BookReader({ bookId, token, onClose }: BookReaderProps) 
             >
                 {currentChapter && (
                     <>
-                        <h2 className={`text-3xl font-bold mb-6 transition-colors ${theme === 'sepia' ? 'text-[#5b4636]' : 'text-white'}`}>
-                            {currentChapter.title}
-                        </h2>
 
                         {currentChapter.orderIndex === 0 && book?.coverImageUrl && (
                             <div className={`bg-white/10 backdrop-blur-md rounded-2xl p-8 border border-white/20 flex flex-col items-center justify-center transition-all duration-700 mb-12 ${isFocusMode && audio.isPlaying ? 'opacity-20 scale-95' : 'opacity-100'}`}>
@@ -328,33 +330,30 @@ export default function BookReader({ bookId, token, onClose }: BookReaderProps) 
                             </div>
                         )}
 
-                        <div className="space-y-4 md:space-y-6 max-w-3xl mx-auto leading-relaxed">
-                            {currentChapter.segments.map((segment, index) => (
-                                <div
-                                    key={segment.id}
-                                    ref={el => segmentRefs.current[index] = el}
-                                    onClick={() => {
-                                        if (audio.audioFiles[index]) audio.playAudio(index, audio.audioFiles);
-                                        else audio.generateAudio(index);
-                                    }}
-                                    className={`group relative mb-2 p-1 rounded-xl transition-all duration-500 cursor-pointer ${index === currentSegmentIndex
-                                        ? currentThemeStyles.active
-                                        : (isFocusMode && audio.isPlaying) ? 'opacity-20 grayscale' : (theme === 'sepia' ? 'hover:bg-amber-900/5' : 'hover:bg-white/5')
-                                        }`}
-                                >
-                                    <p className={`relative z-10 font-medium transition-all duration-500 pr-12`} style={{ fontSize: `${fontSize}px` }}>
-                                        {segment.content}
-                                    </p>
-                                    <button
-                                        onClick={(e) => { e.stopPropagation(); toggleBookmark(segment); }}
-                                        className={`absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-full transition-all duration-300 ${index === currentSegmentIndex ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'} ${bookmarks.some(b => b.segmentId === segment.id) ? 'text-yellow-500 scale-110' : 'text-gray-400 hover:text-white'}`}
+                        <div className={`max-w-3xl mx-auto rounded-2xl p-6 md:p-12 shadow-2xl transition-all duration-700 ${currentThemeStyles.paper} paper-texture ${isFocusMode && audio.isPlaying ? 'shadow-none' : 'shadow-black/20'}`}>
+                            <div className="space-y-1 text-justify leading-relaxed md:leading-[1.8]">
+                                {currentChapter.segments.map((segment, index) => (
+                                    <div
+                                        key={segment.id}
+                                        ref={el => segmentRefs.current[index] = el}
+                                        onClick={() => {
+                                            if (audio.audioFiles[index]) audio.playAudio(index, audio.audioFiles);
+                                            else audio.generateAudio(index);
+                                        }}
+                                        className={`group relative inline-block w-full rounded-lg transition-all duration-500 cursor-pointer ${segment.role === 'heading' ? 'text-center mb-8 mt-12 block' : 'py-1 px-2'} ${index === currentSegmentIndex
+                                            ? currentThemeStyles.active
+                                            : (isFocusMode && audio.isPlaying) ? 'opacity-20 grayscale' : (theme === 'sepia' ? 'hover:bg-[#d3c2a3]/30' : 'hover:bg-white/5')
+                                            }`}
                                     >
-                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill={bookmarks.some(b => b.segmentId === segment.id) ? "currentColor" : "none"} viewBox="0 0 24 24" stroke="currentColor">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
-                                        </svg>
-                                    </button>
-                                </div>
-                            ))}
+                                        <p
+                                            className={`relative z-10 transition-all duration-500 ${fontFamily === 'bookerly' ? 'font-serif tracking-tight' : 'font-sans tracking-normal'} ${segment.role === 'heading' ? 'text-3xl md:text-5xl font-black uppercase tracking-widest leading-tight' : ''}`}
+                                            style={{ fontSize: segment.role === 'heading' ? undefined : `${fontSize}px` }}
+                                        >
+                                            {segment.content}
+                                        </p>
+                                    </div>
+                                ))}
+                            </div>
                         </div>
                     </>
                 )}
@@ -437,6 +436,7 @@ export default function BookReader({ bookId, token, onClose }: BookReaderProps) 
                 audioFiles={audio.audioFiles}
                 pendingSegmentRef={pendingSegmentRef}
                 authAxios={authAxios}
+                fontFamily={fontFamily}
             />
 
             <BookmarkModal

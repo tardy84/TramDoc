@@ -24,6 +24,7 @@ interface LibraryPanelProps {
     audioFiles: string[];
     pendingSegmentRef: React.MutableRefObject<number | null>;
     authAxios: any;
+    fontFamily: string;
 }
 
 const LibraryPanel: React.FC<LibraryPanelProps> = ({
@@ -47,7 +48,8 @@ const LibraryPanel: React.FC<LibraryPanelProps> = ({
     setIsOfflineAvailable,
     audioFiles,
     pendingSegmentRef,
-    authAxios
+    authAxios,
+    fontFamily
 }) => {
     if (!showLibrary) return null;
 
@@ -57,21 +59,24 @@ const LibraryPanel: React.FC<LibraryPanelProps> = ({
             <div className="flex border-b border-white/10">
                 <button
                     onClick={() => setLibraryTab('toc')}
-                    className={`flex-1 py-4 text-xs font-black uppercase tracking-widest transition-all ${libraryTab === 'toc' ? (theme === 'sepia' ? 'bg-[#d3c2a3] text-[#433429]' : 'bg-white/10 text-white') : 'opacity-40 hover:opacity-100'}`}
+                    className={`flex-1 py-4 text-lg transition-all ${libraryTab === 'toc' ? (theme === 'sepia' ? 'bg-[#d3c2a3] text-[#433429]' : 'bg-white/10 text-white') : 'opacity-40 hover:opacity-100'}`}
+                    title="Mục lục"
                 >
-                    📖 Mục lục
+                    📖
                 </button>
                 <button
                     onClick={() => setLibraryTab('bookmarks')}
-                    className={`flex-1 py-4 text-xs font-black uppercase tracking-widest transition-all ${libraryTab === 'bookmarks' ? 'bg-yellow-500/20 text-yellow-500' : 'opacity-40 hover:opacity-100'}`}
+                    className={`flex-1 py-4 text-lg transition-all ${libraryTab === 'bookmarks' ? 'bg-yellow-500/20 text-yellow-500' : 'opacity-40 hover:opacity-100'}`}
+                    title="Dấu trang"
                 >
-                    🔖 Dấu trang
+                    🔖
                 </button>
                 <button
                     onClick={() => setLibraryTab('offline')}
-                    className={`flex-1 py-4 text-xs font-black uppercase tracking-widest transition-all ${libraryTab === 'offline' ? 'bg-emerald-500/20 text-emerald-500' : 'opacity-40 hover:opacity-100'}`}
+                    className={`flex-1 py-4 text-lg transition-all ${libraryTab === 'offline' ? 'bg-emerald-500/20 text-emerald-500' : 'opacity-40 hover:opacity-100'}`}
+                    title="Offline"
                 >
-                    📥 Offline
+                    📥
                 </button>
                 <button onClick={() => setShowLibrary(false)} className="px-4 opacity-40 hover:opacity-100 transition-opacity">✕</button>
             </div>
@@ -87,11 +92,17 @@ const LibraryPanel: React.FC<LibraryPanelProps> = ({
                                     setCurrentSegmentIndex(0);
                                     setShowLibrary(false);
                                 }}
-                                className={`w-full text-left px-4 py-3 rounded-2xl transition-all flex items-center gap-3 ${index === currentChapterIndex ? (theme === 'sepia' ? 'bg-[#d3c2a3] text-[#433429]' : 'bg-blue-500/20 text-blue-400') : 'hover:bg-white/5'}`}
+                                className={`w-full text-left px-6 py-1 rounded-xl transition-all flex items-center justify-between group ${index === currentChapterIndex ? (theme === 'sepia' ? 'bg-[#d3c2a3] text-[#433429]' : 'bg-blue-500/20 text-blue-400') : 'hover:bg-white/5 opacity-80 hover:opacity-100'}`}
                             >
-                                <span className="text-[10px] font-mono opacity-40">{String(index + 1).padStart(2, '0')}</span>
-                                <span className="text-sm font-bold truncate">{chapter.title}</span>
-                                {index === currentChapterIndex && <span className="ml-auto text-xs animate-pulse">●</span>}
+                                <span className={`text-sm font-bold truncate ${fontFamily === 'bookerly' ? 'font-serif' : 'font-sans'}`}>
+                                    {index === 0
+                                        ? 'Bìa sách'
+                                        : (/^Chapter \d+$/i.test(chapter.title) ? '' : chapter.title)
+                                    }
+                                </span>
+                                {index === currentChapterIndex && (
+                                    <div className="w-1.5 h-1.5 rounded-full bg-current animate-pulse shadow-[0_0_8px_currentColor]" />
+                                )}
                             </button>
                         ))}
                     </div>

@@ -19,8 +19,8 @@ const envPath = path.resolve(process.cwd(), '.env');
 const result = dotenv.config({ path: envPath });
 
 const app = express();
-// Priority: 1. Env Var, 2. Hardcoded absolute VPS path, 3. Relative fallback
-const databaseUrl = process.env.DATABASE_URL || 'file:/root/tramdoc/server/prisma/dev.db';
+// Priority: 1. Env Var, 2. Relative fallback
+const databaseUrl = process.env.DATABASE_URL || 'file:./prisma/dev.db';
 
 const prisma = new PrismaClient({
     datasources: {
@@ -149,12 +149,7 @@ app.use(passport.session());
 // Upload configuration
 const upload = multer({ dest: 'uploads/' });
 
-// Static files for audio
-// Dynamic Audio Serving (On-Demand Generation)
-// Static files for audio - Handled by dynamic route at bottom
-// app.get('/audio/:filename'...) removed to prevent duplicate handling logic shadowing the improved lookahead version
-
-// Static files for cover images
+// --- STATIC FILES ---
 app.use('/covers', express.static(path.join(process.cwd(), 'uploads/covers')));
 
 // Basic health check
@@ -607,7 +602,7 @@ app.post('/api/books/:bookId/chapters/:chapterId/tts', async (req: Request, res:
         const remainingSegments = chapter.segments.slice(PRELOAD_COUNT);
 
         // 1. Generate Initial Batch (Blocking) - INTELLIGENT CACHE CHECK
-        console.log(`[TTS] 🚀 Checking/Generating initial batch (${initialSegments.length}/${totalSegments})...`);
+        console.log(`[TTS] 🚀 Processing initial batch (${initialSegments.length}/${totalSegments})...`);
 
         const segmentsToGenerate: { content: string, role: string, index: number }[] = [];
 
@@ -683,7 +678,6 @@ async function generateSegment(bookId: number, chapterId: number, segmentIndex: 
         // Continue
     }
 
-    // 2. Check if currently generating (Dedup)
     // 2. Check if currently generating (Dedup)
     if (generatingFiles.has(fileName)) {
         console.log(`[Audio] ⏳ File ${fileName} is already being generated. Waiting...`);
