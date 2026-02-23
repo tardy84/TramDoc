@@ -44,7 +44,7 @@ export default function Auth({ onLogin }: AuthProps) {
                 <div className="text-center mb-10">
                     <img src="/logo.png" alt="Logo" className="h-20 mx-auto mb-4 mix-blend-screen" />
                     <h1 className="text-4xl font-black text-white tracking-tight font-playfair bg-gradient-to-br from-white via-emerald-100 to-teal-200 bg-clip-text text-transparent">
-                        Trạm Đọc
+                        Trạm Đọc v1.2
                     </h1>
                     <p className="text-slate-400 mt-2">Nơi dừng chân của những tâm hồn yêu sách</p>
                 </div>
