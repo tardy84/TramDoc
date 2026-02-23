@@ -10,8 +10,6 @@ interface ReaderControlsProps {
     playbackSpeed: number;
     currentChapterIndex: number;
     chapters: Chapter[];
-    isOfflineAvailable: boolean;
-    downloadingOffline: boolean;
     togglePlayPause: () => void;
     generateAudio: () => void;
     prevChapter: () => void;
@@ -19,11 +17,8 @@ interface ReaderControlsProps {
     prevSegment: () => void;
     nextSegment: () => void;
     toggleSpeed: () => void;
-    downloadOffline: () => void;
     setShowSettings: (show: boolean) => void;
     showSettings: boolean;
-    isFocusMode: boolean;
-    setIsFocusMode: (mode: boolean) => void;
     currentThemeStyles: any;
 }
 
@@ -36,8 +31,6 @@ const ReaderControls: React.FC<ReaderControlsProps> = ({
     playbackSpeed,
     currentChapterIndex,
     chapters,
-    isOfflineAvailable,
-    downloadingOffline,
     togglePlayPause,
     generateAudio,
     prevChapter,
@@ -45,11 +38,8 @@ const ReaderControls: React.FC<ReaderControlsProps> = ({
     prevSegment,
     nextSegment,
     toggleSpeed,
-    downloadOffline,
     setShowSettings,
     showSettings,
-    isFocusMode,
-    setIsFocusMode,
     currentThemeStyles
 }) => {
     return (
@@ -57,22 +47,12 @@ const ReaderControls: React.FC<ReaderControlsProps> = ({
             <div className="container mx-auto max-w-2xl px-4 pb-8">
                 <div className={`backdrop-blur-3xl border p-6 rounded-[40px] shadow-2xl ${currentThemeStyles.header}`}>
                     <div className="flex items-center justify-between gap-2">
-                        {/* Group: Left (Speed & Focus) */}
                         <div className="flex items-center gap-1 md:gap-3">
                             <button
                                 onClick={toggleSpeed}
                                 className={`h-10 w-10 flex items-center justify-center rounded-full font-mono text-xs border transition-all ${theme === 'sepia' ? 'bg-amber-900/5 border-amber-900/10' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}
                             >
                                 {playbackSpeed}x
-                            </button>
-                            <button
-                                onClick={() => setIsFocusMode(!isFocusMode)}
-                                className={`h-10 w-10 flex items-center justify-center rounded-full transition-all border ${isFocusMode ? 'bg-emerald-500 text-white' : (theme === 'sepia' ? 'bg-amber-900/5 border-amber-900/10' : 'bg-white/5 border-white/10 hover:bg-white/10')}`}
-                                title="Chế độ tập trung"
-                            >
-                                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3v-8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
-                                </svg>
                             </button>
                         </div>
 
@@ -151,22 +131,7 @@ const ReaderControls: React.FC<ReaderControlsProps> = ({
                             </button>
                         </div>
 
-                        {/* Group: Right (Download & Settings) */}
                         <div className="flex items-center gap-1 md:gap-3">
-                            <button
-                                onClick={downloadOffline}
-                                disabled={isOfflineAvailable || downloadingOffline}
-                                className={`h-10 w-10 flex items-center justify-center rounded-full transition-all border ${isOfflineAvailable ? 'bg-emerald-500/20 text-emerald-500 border-emerald-500/50' : theme === 'sepia' ? 'bg-amber-500/10 border-amber-500/20 hover:bg-amber-500/20' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}
-                                title={isOfflineAvailable ? "Đã tải về" : "Tải về nghe offline"}
-                            >
-                                {downloadingOffline ? (
-                                    <div className="h-4 w-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
-                                ) : (
-                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                                    </svg>
-                                )}
-                            </button>
                             <button
                                 onClick={() => setShowSettings(!showSettings)}
                                 className={`h-10 w-10 flex items-center justify-center rounded-full transition-all border ${showSettings ? 'bg-emerald-500 text-white' : (theme === 'sepia' ? 'bg-amber-900/5 border-amber-900/10' : 'bg-white/5 border-white/10 hover:bg-white/10')}`}

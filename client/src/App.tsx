@@ -44,6 +44,7 @@ function MainApp() {
     const [activeHeroIndex, setActiveHeroIndex] = useState(0);
     const [showDashboard, setShowDashboard] = useState(false);
     const [showAdmin, setShowAdmin] = useState(false);
+    const [avatarError, setAvatarError] = useState(false);
 
     const token = localStorage.getItem('audiobook_token');
 
@@ -231,8 +232,14 @@ function MainApp() {
                                     Thoát
                                 </button>
                             </div>
-                            {user.avatarUrl ? (
-                                <img src={user.avatarUrl} className="w-8 h-8 md:w-10 md:h-10 rounded-full border border-emerald-500/30 shadow-lg" alt="Avatar" />
+                            {user.avatarUrl && !avatarError ? (
+                                <img
+                                    src={user.avatarUrl}
+                                    className="w-8 h-8 md:w-10 md:h-10 rounded-full border border-emerald-500/30 shadow-lg object-cover"
+                                    alt="Avatar"
+                                    referrerPolicy="no-referrer"
+                                    onError={() => setAvatarError(true)}
+                                />
                             ) : (
                                 <div className="w-8 h-8 md:w-10 md:h-10 rounded-full bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400 text-[10px] font-bold">
                                     {(user.name || user.email)[0].toUpperCase()}

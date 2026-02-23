@@ -12,6 +12,8 @@ interface SettingsPanelProps {
     setFontFamily: (family: string) => void;
     sleepTimer: number | null;
     setSleepTimer: (timer: number | null) => void;
+    selectedVoice: string;
+    setSelectedVoice: (voice: string) => void;
 }
 
 const SettingsPanel: React.FC<SettingsPanelProps> = ({
@@ -24,7 +26,9 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
     fontFamily,
     setFontFamily,
     sleepTimer,
-    setSleepTimer
+    setSleepTimer,
+    selectedVoice,
+    setSelectedVoice
 }) => {
     if (!showSettings) return null;
 
@@ -76,6 +80,29 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
                     <div className="grid grid-cols-2 gap-2">
                         <button onClick={() => setFontFamily('noto')} className={`p-2 rounded-lg border transition-all font-noto ${fontFamily === 'noto' ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400' : 'bg-white/5 border-white/10'}`}>Hiện đại</button>
                         <button onClick={() => setFontFamily('bookerly')} className={`p-2 rounded-lg border transition-all font-bookerly ${fontFamily === 'bookerly' ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400' : 'bg-white/5 border-white/10'}`}>Cổ điển</button>
+                    </div>
+                </div>
+
+                {/* Voice Selection */}
+                <div>
+                    <label className="text-xs font-bold text-gray-400 uppercase tracking-widest block mb-4">Giọng đọc</label>
+                    <div className="grid grid-cols-2 gap-2">
+                        {[
+                            { id: 'vi-VN-Wavenet-B', label: 'Anh Quân (Nam)' },
+                            { id: 'vi-VN-Wavenet-D', label: 'Minh Quang (Nam)' },
+                            { id: 'vi-VN-Wavenet-A', label: 'Mai Chi (Nữ)' },
+                            { id: 'vi-VN-Wavenet-C', label: 'Thùy Chi (Nữ)' },
+                            { id: 'vi-VN-Neural2-D', label: 'Hoàng Long (Nam)' },
+                            { id: 'vi-VN-Neural2-A', label: 'Hà Phương (Nữ)' }
+                        ].map(v => (
+                            <button
+                                key={v.id}
+                                onClick={() => setSelectedVoice(v.id)}
+                                className={`p-2 rounded-lg border text-[10px] font-bold transition-all ${selectedVoice === v.id ? 'bg-blue-500/20 border-blue-500 text-blue-400' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}
+                            >
+                                {v.label}
+                            </button>
+                        ))}
                     </div>
                 </div>
 

@@ -12,6 +12,7 @@ interface UseReaderAudioProps {
     currentSegmentIndex: number;
     setCurrentSegmentIndex: (index: number) => void;
     playbackSpeed: number;
+    selectedVoice: string;
     nextChapter: () => void;
     authAxios: any;
     getGlobalAudio: () => HTMLAudioElement | null;
@@ -26,6 +27,7 @@ export const useReaderAudio = ({
     currentSegmentIndex,
     setCurrentSegmentIndex,
     playbackSpeed,
+    selectedVoice,
     nextChapter,
     authAxios,
     getGlobalAudio,
@@ -142,7 +144,7 @@ export const useReaderAudio = ({
         try {
             const res = await authAxios.post(
                 `/api/books/${bookId}/chapters/${chapter.id}/tts`,
-                { voice: 'vi-VN-Wavenet-A' },
+                { voice: selectedVoice },
                 { signal: controller.signal }
             );
 
@@ -165,7 +167,7 @@ export const useReaderAudio = ({
                 abortControllerRef.current = null;
             }
         }
-    }, [bookId, chapters, currentChapterIndex, currentSegmentIndex, playAudio, playBrowserTTS, authAxios, setChapters]);
+    }, [bookId, chapters, currentChapterIndex, currentSegmentIndex, playAudio, playBrowserTTS, authAxios, setChapters, selectedVoice]);
 
     const togglePlayPause = useCallback(() => {
         const audio = audioRef.current;
@@ -212,41 +214,57 @@ export const useReaderAudio = ({
         }
     }, [currentSegmentIndex, audioFiles, playAudio, generateAudio]);
 
-    // Auto-play trigger for chapter transitions
+    const prevVoiceRef = useRef(selectedVoice);
+
+    // Auto-play trigger for chapter transitions or Voice changes
     useEffect(() => {
-        // Reset audioFiles when chapter changes
         const chapter = chapters[currentChapterIndex];
-        if (chapter) {
-            if (activeChapterIdRef.current !== chapter.id) {
-                // Chapter changed! Stop existing audio
-                const currentGlobal = getGlobalAudio();
-                if (currentGlobal) {
-                    currentGlobal.pause();
-                    setGlobalAudio(null);
-                    audioRef.current = null;
-                }
-                activeChapterIdRef.current = chapter.id;
-                setAudioFiles(chapter.audioFiles || []);
-                // If it was playing, we need to trigger generation or play for the new chapter
-                if (isPlaying) {
-                    if (chapter.audioFiles && chapter.audioFiles.length > 0) {
-                        playAudio(currentSegmentIndex, chapter.audioFiles);
-                    } else if (!generating) {
-                        generateAudio(currentSegmentIndex);
-                    }
-                }
-            } else if (isPlaying) {
-                // Same chapter, just ensuring something is playing if it's supposed to
-                const globalAudio = getGlobalAudio();
-                if (!globalAudio || (globalAudio.paused && !globalAudio.ended && globalAudio.src)) {
-                    // This handles cases where user clicked next/prev segment
-                    playAudio(currentSegmentIndex, audioFiles);
-                } else if (audioFiles.length === 0 && !generating) {
+        if (!chapter) return;
+
+        // If voice changes AND we are playing/generating, restart with new voice
+        if (prevVoiceRef.current !== selectedVoice) {
+            prevVoiceRef.current = selectedVoice;
+            const currentGlobal = getGlobalAudio();
+            if (currentGlobal) {
+                currentGlobal.pause();
+                setGlobalAudio(null);
+                audioRef.current = null;
+            }
+            if (isPlaying || audioFiles.length > 0) {
+                generateAudio(currentSegmentIndex);
+                return;
+            }
+        }
+
+        if (activeChapterIdRef.current !== chapter.id) {
+            // Chapter changed! Stop existing audio
+            const currentGlobal = getGlobalAudio();
+            if (currentGlobal) {
+                currentGlobal.pause();
+                setGlobalAudio(null);
+                audioRef.current = null;
+            }
+            activeChapterIdRef.current = chapter.id;
+            setAudioFiles(chapter.audioFiles || []);
+            // If it was playing, we need to trigger generation or play for the new chapter
+            if (isPlaying) {
+                if (chapter.audioFiles && chapter.audioFiles.length > 0) {
+                    playAudio(currentSegmentIndex, chapter.audioFiles);
+                } else if (!generating) {
                     generateAudio(currentSegmentIndex);
                 }
             }
+        } else if (isPlaying) {
+            // Same chapter, just ensuring something is playing if it's supposed to
+            const globalAudio = getGlobalAudio();
+            if (!globalAudio || (globalAudio.paused && !globalAudio.ended && globalAudio.src)) {
+                // This handles cases where user clicked next/prev segment
+                playAudio(currentSegmentIndex, audioFiles);
+            } else if (audioFiles.length === 0 && !generating) {
+                generateAudio(currentSegmentIndex);
+            }
         }
-    }, [currentChapterIndex, chapters, isPlaying, currentSegmentIndex, generating, audioFiles, getGlobalAudio, setGlobalAudio, playAudio, generateAudio]);
+    }, [currentChapterIndex, chapters, isPlaying, currentSegmentIndex, generating, audioFiles, getGlobalAudio, setGlobalAudio, playAudio, generateAudio, selectedVoice]);
 
     return {
         isPlaying,

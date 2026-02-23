@@ -25,6 +25,9 @@ interface LibraryPanelProps {
     pendingSegmentRef: React.MutableRefObject<number | null>;
     authAxios: any;
     fontFamily: string;
+    isOfflineAvailable: boolean;
+    downloadingOffline: boolean;
+    downloadOffline: () => void;
 }
 
 const LibraryPanel: React.FC<LibraryPanelProps> = ({
@@ -49,7 +52,10 @@ const LibraryPanel: React.FC<LibraryPanelProps> = ({
     audioFiles,
     pendingSegmentRef,
     authAxios,
-    fontFamily
+    fontFamily,
+    isOfflineAvailable,
+    downloadingOffline,
+    downloadOffline
 }) => {
     if (!showLibrary) return null;
 
@@ -81,9 +87,9 @@ const LibraryPanel: React.FC<LibraryPanelProps> = ({
                 <button onClick={() => setShowLibrary(false)} className="px-4 opacity-40 hover:opacity-100 transition-opacity">✕</button>
             </div>
 
-            <div className="max-h-[60vh] overflow-y-auto no-scrollbar">
+            <div className="h-[480px] overflow-y-auto no-scrollbar">
                 {libraryTab === 'toc' ? (
-                    <div className="p-2 space-y-1">
+                    <div className="p-2 space-y-1 pb-10">
                         {chapters.map((chapter, index) => (
                             <button
                                 key={chapter.id}
@@ -107,7 +113,7 @@ const LibraryPanel: React.FC<LibraryPanelProps> = ({
                         ))}
                     </div>
                 ) : libraryTab === 'bookmarks' ? (
-                    <div className="p-4 space-y-4">
+                    <div className="p-4 space-y-4 pb-10">
                         {bookmarks.length === 0 ? (
                             <div className="py-20 text-center opacity-40 text-sm">Chưa có dấu trang nào</div>
                         ) : (
@@ -154,7 +160,33 @@ const LibraryPanel: React.FC<LibraryPanelProps> = ({
                         )}
                     </div>
                 ) : (
-                    <div className="p-4 space-y-4">
+                    <div className="p-4 space-y-4 pb-10">
+                        {/* Current Book Download Option */}
+                        <div className={`p-4 rounded-2xl border flex flex-col items-center justify-center gap-3 mb-6 transition-all duration-500 ${theme === 'sepia' ? 'bg-[#d3c2a3]/30 border-amber-900/10' : 'bg-white/5 border-white/10'}`}>
+                            {isOfflineAvailable ? (
+                                <div className="w-full flex items-center justify-center gap-2 px-6 py-3 rounded-xl text-[10px] font-bold uppercase tracking-widest border border-emerald-500/20 bg-emerald-500/5 text-emerald-500">
+                                    ✅ Đã tải về máy
+                                </div>
+                            ) : (
+                                <button
+                                    onClick={downloadOffline}
+                                    disabled={downloadingOffline}
+                                    className={`w-full flex items-center justify-center gap-2 px-6 py-3 rounded-xl text-xs font-bold uppercase tracking-widest transition-all border ${theme === 'sepia' ? 'bg-amber-900/10 border-amber-900/20 text-amber-900 hover:bg-amber-900/20' : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20'}`}
+                                >
+                                    {downloadingOffline ? (
+                                        <>
+                                            <div className="h-4 w-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                                            Đang xử lý...
+                                        </>
+                                    ) : (
+                                        <>📥 Tải về máy</>
+                                    )}
+                                </button>
+                            )}
+                        </div>
+
+                        <h4 className="text-[10px] font-black uppercase tracking-widest opacity-30 px-2 mt-4">Sách đã lưu</h4>
+
                         {offlineBooks.length === 0 ? (
                             <div className="py-20 text-center opacity-40 text-sm">Chưa có sách tải về</div>
                         ) : (

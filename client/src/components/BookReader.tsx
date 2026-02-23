@@ -9,6 +9,7 @@ import ReaderControls from './Reader/ReaderControls';
 import LibraryPanel from './Reader/LibraryPanel';
 import SettingsPanel from './Reader/SettingsPanel';
 import BookmarkModal from './Reader/BookmarkModal';
+import ReadingSurface from './Reader/ReadingSurface';
 
 // Types & Hooks
 import { ThemeMode, Book, Chapter, Bookmark, Segment } from './Reader/types';
@@ -80,7 +81,6 @@ export default function BookReader({ bookId, token, onClose }: BookReaderProps) 
     const [showLibrary, setShowLibrary] = useState(false);
     const [libraryTab, setLibraryTab] = useState<'toc' | 'bookmarks' | 'offline'>('toc');
     const [offlineBooks, setOfflineBooks] = useState<any[]>([]);
-    const [isFocusMode, setIsFocusMode] = useState(false);
     const [isRestored, setIsRestored] = useState(false);
 
     // Theme & Layout
@@ -89,6 +89,7 @@ export default function BookReader({ bookId, token, onClose }: BookReaderProps) 
     const [fontFamily, setFontFamily] = useState('noto');
     const [playbackSpeed, setPlaybackSpeed] = useState(1);
     const [sleepTimer, setSleepTimer] = useState<number | null>(null);
+    const [selectedVoice, setSelectedVoice] = useState(() => localStorage.getItem('reader_voice') || 'vi-VN-Wavenet-B');
 
     // Content & Bookmarks
     const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
@@ -97,7 +98,7 @@ export default function BookReader({ bookId, token, onClose }: BookReaderProps) 
     const [downloadingOffline, setDownloadingOffline] = useState(false);
 
     // Refs
-    const segmentRefs = useRef<(HTMLParagraphElement | null)[]>([]);
+    const segmentRefs = useRef<(HTMLDivElement | null)[]>([]);
     const pendingSegmentRef = useRef<number | null>(null);
     const lastScrollY = useRef(0);
 
@@ -120,6 +121,7 @@ export default function BookReader({ bookId, token, onClose }: BookReaderProps) 
         currentSegmentIndex,
         setCurrentSegmentIndex,
         playbackSpeed,
+        selectedVoice,
         nextChapter: () => {
             if (currentChapterIndex < chapters.length - 1) {
                 setCurrentChapterIndex(prev => prev + 1);
@@ -182,17 +184,6 @@ export default function BookReader({ bookId, token, onClose }: BookReaderProps) 
             });
         }
     }, [currentSegmentIndex, theme]);
-
-    // Focus Mode Auto-Hide
-    useEffect(() => {
-        let timeout: any;
-        if (isFocusMode && audio.isPlaying) {
-            timeout = setTimeout(() => setShowControls(false), 3000);
-        } else {
-            setShowControls(true);
-        }
-        return () => clearTimeout(timeout);
-    }, [isFocusMode, audio.isPlaying]);
 
     // Sleep Timer Logic
     useEffect(() => {
@@ -267,6 +258,11 @@ export default function BookReader({ bookId, token, onClose }: BookReaderProps) 
                 await saveChapterAudio(book.id, chapters[currentChapterIndex].id, chapters[currentChapterIndex].audioFiles);
             }
             setIsOfflineAvailable(true);
+
+            // Refresh the list immediately so the UI updates
+            const updatedOffline = await getAllOfflineBooks();
+            setOfflineBooks(updatedOffline);
+
             showToast('Sách đã được tải xuống để nghe offline!', 'success');
         } catch (e) {
             showToast('Lỗi khi tải sách!', 'error');
@@ -311,53 +307,21 @@ export default function BookReader({ bookId, token, onClose }: BookReaderProps) 
                 toggleBookmark={toggleBookmark}
             />
 
-            <div
-                key={currentChapterIndex}
+            <ReadingSurface
+                book={book}
+                currentChapter={currentChapter}
+                currentSegmentIndex={currentSegmentIndex}
+                fontSize={fontSize}
+                fontFamily={fontFamily}
+                theme={theme}
+                currentThemeStyles={currentThemeStyles}
+                segmentRefs={segmentRefs}
+                onSegmentClick={(index) => {
+                    if (audio.audioFiles[index]) audio.playAudio(index, audio.audioFiles);
+                    else audio.generateAudio(index);
+                }}
                 onScroll={handleScroll}
-                className="container mx-auto px-4 py-20 h-screen overflow-y-auto animate-in fade-in slide-in-from-right-4 duration-500 ease-out scroll-smooth no-scrollbar"
-                style={{ paddingBottom: '160px' }}
-            >
-                {currentChapter && (
-                    <>
-
-                        {currentChapter.orderIndex === 0 && book?.coverImageUrl && (
-                            <div className={`bg-white/10 backdrop-blur-md rounded-2xl p-8 border border-white/20 flex flex-col items-center justify-center transition-all duration-700 mb-12 ${isFocusMode && audio.isPlaying ? 'opacity-20 scale-95' : 'opacity-100'}`}>
-                                <img src={`${API_BASE_URL}${book.coverImageUrl}`} className="w-48 h-72 object-cover rounded-xl shadow-2xl mb-6" alt="" />
-                                <div className="text-center">
-                                    <h1 className="text-2xl font-black text-white mb-2">{book.title}</h1>
-                                    <p className="text-gray-400 font-bold uppercase tracking-widest text-xs">{book.author || 'Khuyết danh'}</p>
-                                </div>
-                            </div>
-                        )}
-
-                        <div className={`max-w-3xl mx-auto rounded-2xl p-6 md:p-12 shadow-2xl transition-all duration-700 ${currentThemeStyles.paper} paper-texture ${isFocusMode && audio.isPlaying ? 'shadow-none' : 'shadow-black/20'}`}>
-                            <div className="space-y-1 text-justify leading-relaxed md:leading-[1.8]">
-                                {currentChapter.segments.map((segment, index) => (
-                                    <div
-                                        key={segment.id}
-                                        ref={el => segmentRefs.current[index] = el}
-                                        onClick={() => {
-                                            if (audio.audioFiles[index]) audio.playAudio(index, audio.audioFiles);
-                                            else audio.generateAudio(index);
-                                        }}
-                                        className={`group relative inline-block w-full rounded-lg transition-all duration-500 cursor-pointer ${segment.role === 'heading' ? 'text-center mb-8 mt-12 block' : 'py-1 px-2'} ${index === currentSegmentIndex
-                                            ? currentThemeStyles.active
-                                            : (isFocusMode && audio.isPlaying) ? 'opacity-20 grayscale' : (theme === 'sepia' ? 'hover:bg-[#d3c2a3]/30' : 'hover:bg-white/5')
-                                            }`}
-                                    >
-                                        <p
-                                            className={`relative z-10 transition-all duration-500 ${fontFamily === 'bookerly' ? 'font-serif tracking-tight' : 'font-sans tracking-normal'} ${segment.role === 'heading' ? 'text-3xl md:text-5xl font-black uppercase tracking-widest leading-tight' : ''}`}
-                                            style={{ fontSize: segment.role === 'heading' ? undefined : `${fontSize}px` }}
-                                        >
-                                            {segment.content}
-                                        </p>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    </>
-                )}
-            </div>
+            />
 
             <ReaderControls
                 showControls={showControls}
@@ -368,8 +332,6 @@ export default function BookReader({ bookId, token, onClose }: BookReaderProps) 
                 playbackSpeed={playbackSpeed}
                 currentChapterIndex={currentChapterIndex}
                 chapters={chapters}
-                isOfflineAvailable={isOfflineAvailable}
-                downloadingOffline={downloadingOffline}
                 togglePlayPause={audio.togglePlayPause}
                 generateAudio={audio.generateAudio}
                 prevChapter={() => {
@@ -393,11 +355,8 @@ export default function BookReader({ bookId, token, onClose }: BookReaderProps) 
                     const globalAudio = getGlobalAudio();
                     if (globalAudio) globalAudio.playbackRate = nextSpeed;
                 }}
-                downloadOffline={downloadOffline}
                 setShowSettings={setShowSettings}
                 showSettings={showSettings}
-                isFocusMode={isFocusMode}
-                setIsFocusMode={setIsFocusMode}
                 currentThemeStyles={currentThemeStyles}
             />
 
@@ -412,6 +371,11 @@ export default function BookReader({ bookId, token, onClose }: BookReaderProps) 
                 setFontFamily={setFontFamily}
                 sleepTimer={sleepTimer}
                 setSleepTimer={setSleepTimer}
+                selectedVoice={selectedVoice}
+                setSelectedVoice={(voice) => {
+                    setSelectedVoice(voice);
+                    localStorage.setItem('reader_voice', voice);
+                }}
             />
 
             <LibraryPanel
@@ -433,6 +397,9 @@ export default function BookReader({ bookId, token, onClose }: BookReaderProps) 
                 generateAudio={audio.generateAudio}
                 deleteOfflineBook={deleteOfflineBook}
                 setIsOfflineAvailable={setIsOfflineAvailable}
+                isOfflineAvailable={isOfflineAvailable}
+                downloadingOffline={downloadingOffline}
+                downloadOffline={downloadOffline}
                 audioFiles={audio.audioFiles}
                 pendingSegmentRef={pendingSegmentRef}
                 authAxios={authAxios}
@@ -445,10 +412,7 @@ export default function BookReader({ bookId, token, onClose }: BookReaderProps) 
                 saveBookmarkWithNote={saveBookmarkWithNote}
             />
 
-            {/* Focus Hint */}
-            {isFocusMode && !showControls && audio.isPlaying && (
-                <div onClick={() => setShowControls(true)} className="fixed inset-0 z-[5] cursor-pointer" />
-            )}
+
 
             {/* Toast System */}
             {toast && (
