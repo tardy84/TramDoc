@@ -153,7 +153,7 @@ function MainApp() {
         checkAuth();
     }, []);
 
-    if (loading) return <div className="min-h-screen bg-slate-900 flex items-center justify-center text-emerald-500 animate-pulse text-2xl font-black">TRẠM ĐỌC...</div>;
+    if (loading) return <div className="min-h-screen bg-slate-900 flex items-center justify-center text-emerald-500 animate-pulse text-2xl font-black">TRẠM ĐỌC v1.2...</div>;
     if (!user) return <Auth onLogin={(t, u) => { localStorage.setItem('audiobook_token', t); setUser(u); window.location.reload(); }} />;
 
     if (selectedBookId !== null) {
@@ -194,7 +194,7 @@ function MainApp() {
                     <div className="flex items-center gap-1.5 group">
                         <img src="/logo.png" alt="Logo" className="h-10 md:h-14 w-auto object-contain mix-blend-screen" />
                         <h1 className="text-xl md:text-4xl font-black text-white tracking-tight font-playfair bg-gradient-to-br from-white via-emerald-100 to-teal-200 bg-clip-text text-transparent">
-                            Trạm Đọc
+                            Trạm Đọc v1.2
                         </h1>
                     </div>
 

@@ -1,4 +1,4 @@
-# Trạm Đọc (Audiobook)
+# Trạm Đọc v1.2 (Audiobook)
 
 A premium web-based ebook and audiobook reader with high-quality Vietnamese Text-to-Speech (TTS) integration. Designed for a cinematic reading and listening experience.
 
