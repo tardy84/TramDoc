@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import axios from 'axios';
 import { getGlobalAudio, setGlobalAudio } from '../services/audioPlayer';
-import { saveBookOffline, saveChapterAudio, isBookOffline, getAllOfflineBooks, deleteOfflineBook } from '../services/offlineManager';
+import { saveBookOffline, saveChapterAudio, isBookOffline, getAllOfflineBooks, deleteOfflineBook, getOfflineBook } from '../services/offlineManager';
 
 // Sub-components
 import ReaderHeader from './Reader/ReaderHeader';
@@ -9,7 +9,6 @@ import ReaderControls from './Reader/ReaderControls';
 import LibraryPanel from './Reader/LibraryPanel';
 import SettingsPanel from './Reader/SettingsPanel';
 import BookmarkModal from './Reader/BookmarkModal';
-import ReadingSurface from './Reader/ReadingSurface';
 
 // Types & Hooks
 import { ThemeMode, Book, Chapter, Bookmark, Segment } from './Reader/types';
@@ -57,6 +56,16 @@ const THEMES: Record<ThemeMode, { container: string, text: string, card: string,
         btn: 'bg-zinc-800 border-zinc-700 text-gray-400 hover:text-white',
         backBtn: 'bg-white/10 text-white/70 group-hover:bg-white/20',
         paper: 'bg-black'
+    },
+    dark: {
+        container: 'bg-[#121212]', // Material Dark
+        text: 'text-gray-300',
+        card: 'bg-white/5 border-white/10',
+        active: 'bg-blue-500/20 text-blue-200 ring-1 ring-blue-500/30',
+        header: 'bg-[#121212]/80 backdrop-blur-xl border-white/5',
+        btn: 'bg-white/5 border-white/10 text-white/70 hover:text-white',
+        backBtn: 'bg-white/10 text-white/70 group-hover:bg-white/20',
+        paper: 'bg-[#1e1e1e]'
     }
 };
 
@@ -64,9 +73,10 @@ interface BookReaderProps {
     bookId: number;
     token: string | null;
     onClose: () => void;
+    onSwitchBook?: (id: number) => void;
 }
 
-export default function BookReader({ bookId, token, onClose }: BookReaderProps) {
+export default function BookReader({ bookId, token, onClose, onSwitchBook }: BookReaderProps) {
     const [book, setBook] = useState<Book | null>(null);
     const [chapters, setChapters] = useState<Chapter[]>([]);
     const [currentChapterIndex, setCurrentChapterIndex] = useState(0);
@@ -98,7 +108,7 @@ export default function BookReader({ bookId, token, onClose }: BookReaderProps) 
     const [downloadingOffline, setDownloadingOffline] = useState(false);
 
     // Refs
-    const segmentRefs = useRef<(HTMLDivElement | null)[]>([]);
+    const segmentRefs = useRef<(HTMLParagraphElement | null)[]>([]);
     const pendingSegmentRef = useRef<number | null>(null);
     const lastScrollY = useRef(0);
 
@@ -151,8 +161,13 @@ export default function BookReader({ bookId, token, onClose }: BookReaderProps) 
         const loadBook = async () => {
             try {
                 const [bookRes, bookmarksRes, offlineStatus] = await Promise.all([
-                    authAxios.get(`/api/books/${bookId}`),
-                    authAxios.get(`/api/books/${bookId}/bookmarks`),
+                    authAxios.get(`/api/books/${bookId}`).catch(async (err) => {
+                        // Fallback to offline book metadata
+                        const offBook = await getOfflineBook(bookId);
+                        if (offBook) return { data: offBook };
+                        throw err;
+                    }),
+                    authAxios.get(`/api/books/${bookId}/bookmarks`).catch(() => ({ data: [] })),
                     isBookOffline(bookId)
                 ]);
                 setBook(bookRes.data);
@@ -161,7 +176,8 @@ export default function BookReader({ bookId, token, onClose }: BookReaderProps) 
                 setIsOfflineAvailable(offlineStatus);
                 setLoading(false);
             } catch (e: any) {
-                setError(e.message);
+                console.error('Failed to load book:', e);
+                setError(e.message || 'Lỗi kết nối mạng và không có bản lưu offline.');
                 setLoading(false);
             }
         };
@@ -184,6 +200,8 @@ export default function BookReader({ bookId, token, onClose }: BookReaderProps) 
             });
         }
     }, [currentSegmentIndex, theme]);
+
+
 
     // Sleep Timer Logic
     useEffect(() => {
@@ -253,19 +271,41 @@ export default function BookReader({ bookId, token, onClose }: BookReaderProps) 
         if (!book) return;
         setDownloadingOffline(true);
         try {
+            // 1. Save metadata first
             await saveBookOffline(book);
-            if (chapters[currentChapterIndex]?.audioFiles) {
-                await saveChapterAudio(book.id, chapters[currentChapterIndex].id, chapters[currentChapterIndex].audioFiles);
+
+            const currentChapter = chapters[currentChapterIndex];
+            let files = currentChapter.audioFiles;
+
+            // 2. If no audio files exist for this chapter, trigger generation first
+            if (!files || files.length === 0) {
+                showToast('Đang khởi tạo âm thanh trước khi tải về...', 'info');
+                const res = await authAxios.post(
+                    `/api/books/${bookId}/chapters/${currentChapter.id}/tts`,
+                    { voice: selectedVoice }
+                );
+                files = res.data.audioFiles;
+
+                // Update chapters list with the new audio files
+                setChapters(prev => prev.map((c, i) => i === currentChapterIndex ? { ...c, audioFiles: files } : c));
             }
+
+            // 3. Save audio blobs
+            if (files && files.length > 0) {
+                showToast(`Đang tải ${files.length} đoạn âm thanh...`, 'info');
+                await saveChapterAudio(book.id, currentChapter.id, files);
+            }
+
             setIsOfflineAvailable(true);
 
-            // Refresh the list immediately so the UI updates
+            // Refresh the offline list immediately
             const updatedOffline = await getAllOfflineBooks();
             setOfflineBooks(updatedOffline);
 
-            showToast('Sách đã được tải xuống để nghe offline!', 'success');
-        } catch (e) {
-            showToast('Lỗi khi tải sách!', 'error');
+            showToast('Chương truyện đã sẵn sàng để nghe offline!', 'success');
+        } catch (e: any) {
+            console.error('Download error:', e);
+            showToast('Lỗi khi tải sách: ' + (e.response?.data?.error || e.message), 'error');
         } finally {
             setDownloadingOffline(false);
         }
@@ -307,21 +347,63 @@ export default function BookReader({ bookId, token, onClose }: BookReaderProps) 
                 toggleBookmark={toggleBookmark}
             />
 
-            <ReadingSurface
-                book={book}
-                currentChapter={currentChapter}
-                currentSegmentIndex={currentSegmentIndex}
-                fontSize={fontSize}
-                fontFamily={fontFamily}
-                theme={theme}
-                currentThemeStyles={currentThemeStyles}
-                segmentRefs={segmentRefs}
-                onSegmentClick={(index) => {
-                    if (audio.audioFiles[index]) audio.playAudio(index, audio.audioFiles);
-                    else audio.generateAudio(index);
-                }}
+            <div
+                key={currentChapterIndex}
                 onScroll={handleScroll}
-            />
+                className="container mx-auto px-4 py-20 h-screen overflow-y-auto animate-in fade-in slide-in-from-right-4 duration-500 ease-out scroll-smooth no-scrollbar"
+                style={{ paddingBottom: '160px' }}
+            >
+                {currentChapter && (
+                    <div className="max-w-3xl mx-auto">
+                        {/* Book Header Card (Only for Chapter 0) */}
+                        {currentChapter.orderIndex === 0 && book && (
+                            <div className="bg-white/10 backdrop-blur-md rounded-3xl p-8 border border-white/20 flex flex-col items-center justify-center mb-12 animate-in fade-in zoom-in duration-700">
+                                <div className="relative w-48 h-72 rounded-2xl shadow-2xl mb-6 overflow-hidden transform hover:scale-105 transition-transform duration-500">
+                                    <img src={book.coverImageUrl ? `${API_BASE_URL}${book.coverImageUrl}` : '/default-cover.png'} className="w-full h-full object-cover" alt="" />
+                                    {!book.coverImageUrl && (
+                                        <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center z-10 pointer-events-none">
+                                            <div className="absolute inset-0 bg-black/40" />
+                                            <h3 className="text-white font-playfair font-black text-3xl leading-tight line-clamp-4 mb-4 drop-shadow-md z-10 uppercase tracking-wide">{book.title}</h3>
+                                            <p className="text-white/80 font-serif text-sm line-clamp-2 drop-shadow-md z-10">{book.author || 'Khuyết danh'}</p>
+                                        </div>
+                                    )}
+                                </div>
+                                <div className="text-center">
+                                    <h1 className="text-3xl font-black text-white mb-2">{book.title}</h1>
+                                    <p className="text-emerald-400 font-bold uppercase tracking-[0.2em] text-[10px]">{book.author || 'Khuyết danh'}</p>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Reading Surface */}
+                        <div className={`rounded-[40px] p-6 md:p-16 shadow-2xl transition-all duration-700 ${currentThemeStyles.paper} paper-texture shadow-black/20 overflow-hidden`}>
+                            <div className="space-y-1 text-justify leading-relaxed md:leading-[2]">
+                                {currentChapter.segments.map((segment, index) => (
+                                    <div
+                                        key={segment.id}
+                                        ref={el => segmentRefs.current[index] = el}
+                                        onClick={() => {
+                                            if (audio.audioFiles[index]) audio.playAudio(index, audio.audioFiles);
+                                            else audio.generateAudio(index);
+                                        }}
+                                        className={`group relative inline-block w-full rounded-xl transition-all duration-500 cursor-pointer ${segment.role === 'heading' ? 'text-center mb-12 mt-16 block' : 'py-1.5 px-3'} ${index === currentSegmentIndex
+                                            ? currentThemeStyles.active + ' scale-[1.02] z-10'
+                                            : (theme === 'sepia' ? 'hover:bg-[#d3c2a3]/40' : 'hover:bg-white/5')
+                                            }`}
+                                    >
+                                        <p
+                                            className={`relative z-10 transition-all duration-500 ${fontFamily === 'bookerly' ? 'font-serif tracking-tight' : 'font-sans tracking-normal'} ${segment.role === 'heading' ? 'text-4xl md:text-6xl font-black uppercase tracking-widest leading-tight' : ''}`}
+                                            style={{ fontSize: segment.role === 'heading' ? undefined : `${fontSize}px` }}
+                                        >
+                                            {segment.content}
+                                        </p>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                )}
+            </div>
 
             <ReaderControls
                 showControls={showControls}
@@ -404,6 +486,7 @@ export default function BookReader({ bookId, token, onClose }: BookReaderProps) 
                 pendingSegmentRef={pendingSegmentRef}
                 authAxios={authAxios}
                 fontFamily={fontFamily}
+                onSwitchBook={onSwitchBook}
             />
 
             <BookmarkModal
@@ -411,8 +494,6 @@ export default function BookReader({ bookId, token, onClose }: BookReaderProps) 
                 setEditingBookmark={setEditingBookmark}
                 saveBookmarkWithNote={saveBookmarkWithNote}
             />
-
-
 
             {/* Toast System */}
             {toast && (

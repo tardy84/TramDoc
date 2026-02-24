@@ -166,10 +166,12 @@ export default function Dashboard({ books, user, onClose }: DashboardProps) {
                                 {inProgressBooks > 0 ? books.filter(b => (b.progress || 0) > 0 && (b.progress || 0) < 100).slice(0, 3).map(book => (
                                     <div key={book.id} className="flex items-center gap-4 p-3 bg-white/5 rounded-xl border border-white/5 hover:bg-white/10 transition-colors">
                                         <div className="w-12 h-16 bg-slate-700 rounded-lg flex-shrink-0 overflow-hidden relative">
-                                            {book.coverImageUrl ? (
-                                                <img src={`${API_BASE_URL}${book.coverImageUrl}`} className="w-full h-full object-cover" alt="" />
-                                            ) : (
-                                                <div className="w-full h-full flex items-center justify-center text-lg">📘</div>
+                                            <img src={book.coverImageUrl ? `${API_BASE_URL}${book.coverImageUrl}` : '/default-cover.png'} className="w-full h-full object-cover" alt="" />
+                                            {!book.coverImageUrl && (
+                                                <div className="absolute inset-0 flex flex-col items-center justify-center p-1 text-center pointer-events-none">
+                                                    <div className="absolute inset-0 bg-black/40" />
+                                                    <span className="text-white font-black text-[9px] leading-tight line-clamp-3 drop-shadow-md z-10 px-0.5 uppercase tracking-wider">{book.title}</span>
+                                                </div>
                                             )}
                                         </div>
                                         <div className="flex-1 min-w-0">

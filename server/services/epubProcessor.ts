@@ -2,12 +2,11 @@ import AdmZip from 'adm-zip';
 import { parseString } from 'xml2js';
 import { promisify } from 'util';
 import path from 'path';
-import fs from 'fs/promises';
+import { PrismaClient } from '@prisma/client';
 import * as cheerio from 'cheerio';
-import prisma from '../lib/prisma.js';
-import { generateSegment } from '../lib/audioGenerator.js';
 
 const parseXml = promisify(parseString);
+const prisma = new PrismaClient({});
 
 export class EpubProcessor {
     /**
@@ -106,7 +105,9 @@ export class EpubProcessor {
         opfXml: any,
         opfDir: string
     ): Promise<string | undefined> {
+        const fs = await import('fs/promises');
         const manifest = opfXml.package.manifest[0].item;
+
         const metadata = opfXml.package.metadata[0];
         const coverMeta = metadata.meta?.find((m: any) =>
             m.$?.name === 'cover' || m.$?.property === 'cover-image'
@@ -147,40 +148,58 @@ export class EpubProcessor {
         return savePath;
     }
 
+    /**
+     * Extract chapter title from HTML using Cheerio
+     * Improved to filter out author names and prioritize "Chapter/Chương" patterns
+     */
     private extractChapterTitle(html: string, bookTitle: string, author?: string): string | null {
         const $ = cheerio.load(html);
         const bookTitleNormalized = bookTitle.trim().toLowerCase();
         const authorNormalized = author?.trim().toLowerCase();
 
+        // Collect candidates
         const candidates: string[] = [];
         $('h1, h2, h3, p').slice(0, 8).each((_, el) => {
             const text = $(el).text().trim().replace(/\s+/g, ' ');
             if (text && text.length > 0 && text.length < 100) {
                 const lowText = text.toLowerCase();
+                // Skip if matches book title or author
                 if (lowText === bookTitleNormalized) return;
                 if (authorNormalized && lowText === authorNormalized) return;
+                // Skip if it contains only metadata
                 if (lowText.includes('trang ') || lowText.includes('page ')) return;
+
                 candidates.push(text);
             }
             if (text.length > 200) return false;
         });
 
         if (candidates.length === 0) return null;
+
+        // Pattern matching for "Chương X", "Chapter X", "Phần X"
         const chapterPattern = /^(chương|chapter|phần|tiết|lời|mục lục)\s+/i;
         const priorityCandidate = candidates.find(c => chapterPattern.test(c));
         if (priorityCandidate) return priorityCandidate;
 
+        // If we have "1" followed by "Title", combine them
         if (candidates.length >= 2 && candidates[0].length < 10 && !isNaN(parseInt(candidates[0]))) {
             return `${candidates[0]} - ${candidates[1]}`;
         }
+
         return candidates[0];
     }
 
+    /**
+     * Detect if chapter is Table of Contents
+     */
     private detectTableOfContents(title: string): boolean {
         const lowerTitle = title.toLowerCase();
         return ['mục lục', 'contents', 'toc', 'muc luc', '目录'].some(p => lowerTitle.includes(p));
     }
 
+    /**
+     * Process a single chapter: extract semantic segments using Cheerio
+     */
     private async processChapter(
         bookId: number,
         chapterTitle: string,
@@ -189,6 +208,8 @@ export class EpubProcessor {
         isTableOfContents: boolean = false
     ): Promise<void> {
         const $ = cheerio.load(html);
+
+        // Remove noise
         $('script, style, link, iFrame, img, aside, nav').remove();
 
         const chapter = await prisma.chapter.create({
@@ -203,15 +224,20 @@ export class EpubProcessor {
         const segmentTexts: string[] = [];
         const segmentRoles: ('narrator' | 'heading')[] = [];
 
+        // Iterate through all "content" elements in order
         $('body').find('h1, h2, h3, h4, h5, h6, p, div').each((_, el) => {
             const $el = $(el);
             const isHeading = $el.is('h1, h2, h3, h4');
+
+            // Skip if it's a container that has child paragraphs (avoid duplication)
             if ($el.is('div') && $el.find('p, div').length > 0) return;
 
             let text = $el.text().trim().replace(/\s+/g, ' ');
-            if (!text || text.length < 1) return;
+            if (!text || text.length < 2) return;
 
+            // Split long paragraphs into smaller segments
             const sentences = this.splitIntoSentences(text);
+
             sentences.forEach((s) => {
                 segmentTexts.push(s);
                 segmentRoles.push(isHeading ? 'heading' : 'narrator');
@@ -232,20 +258,57 @@ export class EpubProcessor {
         }
     }
 
+    /**
+     * Split text into sentences intelligently and group them into logical chunks
+     * Target chunk size is ~300 characters for optimal TTS naturalness and UX latency.
+     */
     private splitIntoSentences(text: string): string[] {
+        // Improved Regex: Handles punctuation followed by optional closing quotes/brackets
         const sentenceRegex = /[^.!?]+[.!?]+["'”’]?/g;
         const matches = text.match(sentenceRegex);
-        if (!matches) return [text];
 
-        return matches
+        if (!matches || matches.length === 0) return [text.trim()];
+
+        const sentences = matches
             .map(s => s.trim())
             .filter(s => s.length > 0)
             .reduce((acc, curr) => {
+                // If a "sentence" is too long (e.g. 600+ chars), split it by comma as a last resort
                 if (curr.length > 600) {
                     const parts = curr.split(/[,;]/).map(p => p.trim()).filter(p => p.length > 0);
                     return [...acc, ...parts];
                 }
                 return [...acc, curr];
             }, [] as string[]);
+
+        // Smart Chunking: Group sentences into chunks of approx 300 characters max
+        const MAX_CHUNK_LENGTH = 300;
+        const chunks: string[] = [];
+        let currentChunk = '';
+
+        for (const sentence of sentences) {
+            // First sentence in a chunk
+            if (!currentChunk) {
+                currentChunk = sentence;
+                continue;
+            }
+
+            // Check if adding this sentence exceeds the preferred limit
+            if (currentChunk.length + sentence.length + 1 > MAX_CHUNK_LENGTH) {
+                // Current chunk is long enough, push it and start a new one
+                chunks.push(currentChunk.trim());
+                currentChunk = sentence;
+            } else {
+                // Add to current chunk with a space
+                currentChunk += ' ' + sentence;
+            }
+        }
+
+        // Push the last remaining chunk
+        if (currentChunk) {
+            chunks.push(currentChunk.trim());
+        }
+
+        return chunks;
     }
 }

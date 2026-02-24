@@ -1,86 +1,48 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
+import ConfirmModal from './components/Shared/ConfirmModal';
+import PasswordModal from './components/Auth/PasswordModal';
 import BookReader from './components/BookReader';
 import Auth from './components/Auth';
 import AuthSuccess from './components/AuthSuccess';
 import Dashboard from './components/Dashboard';
 import AdminDashboard from './components/Admin/AdminDashboard';
 import { API_BASE_URL } from './constants';
+import { getAllOfflineBooks, deleteOfflineBook } from './services/offlineManager';
+import InfoModal from './components/Reader/InfoModal';
+import { Book, User } from './types';
 
-interface Book {
-    id: number;
-    title: string;
-    author: string;
-    coverImageUrl?: string;
-    createdAt: string;
-    chapters: any[];
-    progress?: number;
-    currentText?: string;
-    lastRead?: number;
-}
-
-interface User {
-    id: number;
-    email: string;
-    name: string;
-    avatarUrl?: string;
-    role: string;
-}
-
-function MainApp() {
-    const [books, setBooks] = useState<Book[]>([]);
-    const [user, setUser] = useState<User | null>(null);
+function MainApp({
+    user,
+    setUser,
+    books,
+    loadBooks,
+    authAxios,
+    loading
+}: {
+    user: User,
+    setUser: (u: User | null) => void,
+    books: Book[],
+    loadBooks: () => void,
+    authAxios: any,
+    loading: boolean
+}) {
+    const navigate = useNavigate();
     const [uploading, setUploading] = useState(false);
     const [progress, setProgress] = useState(0);
     const [uploadStatus, setUploadStatus] = useState('');
     const [toast, setToast] = useState<{ message: string, type: 'success' | 'error' } | null>(null);
     const [selectedBookId, setSelectedBookId] = useState<number | null>(null);
     const [deleteConfirm, setDeleteConfirm] = useState<{ bookId: number, title: string } | null>(null);
-    const [loading, setLoading] = useState(true);
     const [viewMode, setViewMode] = useState<'all' | 'author'>('all');
     const [searchQuery, setSearchQuery] = useState('');
     const [sortBy, setSortBy] = useState<'recent' | 'title' | 'progress'>('recent');
     const [activeHeroIndex, setActiveHeroIndex] = useState(0);
     const [showDashboard, setShowDashboard] = useState(false);
-    const [showAdmin, setShowAdmin] = useState(false);
+    const [showInfo, setShowInfo] = useState(false);
+    const [showPasswordModal, setShowPasswordModal] = useState(false);
     const [avatarError, setAvatarError] = useState(false);
-
-    const token = localStorage.getItem('audiobook_token');
-
-    const authAxios = axios.create({
-        baseURL: API_BASE_URL,
-        headers: { Authorization: `Bearer ${token}` }
-    });
-
-    const checkAuth = async () => {
-        if (!token) {
-            setLoading(false);
-            return;
-        }
-        try {
-            const res = await authAxios.get('/api/auth/me');
-            setUser(res.data);
-            loadBooks();
-        } catch (e) {
-            localStorage.removeItem('audiobook_token');
-            setUser(null);
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const loadBooks = async () => {
-        try {
-            const res = await authAxios.get('/api/books');
-            const fetchedBooks = res.data.sort((a: any, b: any) =>
-                new Date(b.lastRead || 0).getTime() - new Date(a.lastRead || 0).getTime()
-            );
-            setBooks(fetchedBooks);
-        } catch (error) {
-            console.error('Error loading books:', error);
-        }
-    };
 
     const showToast = (message: string, type: 'success' | 'error' = 'success') => {
         setToast({ message, type });
@@ -134,6 +96,8 @@ function MainApp() {
         if (!deleteConfirm) return;
         try {
             await authAxios.delete(`/api/books/${deleteConfirm.bookId}`);
+            // Also cleanup offline storage if it exists
+            await deleteOfflineBook(deleteConfirm.bookId);
             showToast(`Sách "${deleteConfirm.title}" đã được xóa!`);
             loadBooks();
         } catch (error: any) {
@@ -149,15 +113,18 @@ function MainApp() {
         window.location.href = '/';
     };
 
-    useEffect(() => {
-        checkAuth();
-    }, []);
+    const token = localStorage.getItem('audiobook_token');
 
-    if (loading) return <div className="min-h-screen bg-slate-900 flex items-center justify-center text-emerald-500 animate-pulse text-2xl font-black">TRẠM ĐỌC v1.2...</div>;
+    if (loading) return <div className="min-h-screen bg-slate-900 flex items-center justify-center text-emerald-500 animate-pulse text-2xl font-black">TRẠM ĐỌC...</div>;
     if (!user) return <Auth onLogin={(t, u) => { localStorage.setItem('audiobook_token', t); setUser(u); window.location.reload(); }} />;
 
     if (selectedBookId !== null) {
-        return <BookReader bookId={selectedBookId} token={token} onClose={() => { setSelectedBookId(null); loadBooks(); }} />;
+        return <BookReader
+            bookId={selectedBookId}
+            token={token}
+            onClose={() => { setSelectedBookId(null); loadBooks(); }}
+            onSwitchBook={(id) => setSelectedBookId(id)}
+        />;
     }
 
     const filteredAndSortedBooks = books
@@ -184,8 +151,9 @@ function MainApp() {
         return acc;
     }, {} as Record<string, Book[]>);
 
-    const inProgressBooks = books.filter(b => (b.progress || 0) > 0 && (b.progress || 0) < 100).slice(0, 3);
-    const heroBooks = inProgressBooks.length > 0 ? inProgressBooks : (books.length > 0 ? [books[0]] : []);
+    const heroBooks = [...books]
+        .sort((a, b) => new Date(b.lastRead || 0).getTime() - new Date(a.lastRead || 0).getTime())
+        .slice(0, 3);
 
     return (
         <div className="min-h-screen bg-slate-900 text-slate-100 font-outfit selection:bg-emerald-500/30">
@@ -194,7 +162,7 @@ function MainApp() {
                     <div className="flex items-center gap-1.5 group">
                         <img src="/logo.png" alt="Logo" className="h-10 md:h-14 w-auto object-contain mix-blend-screen" />
                         <h1 className="text-xl md:text-4xl font-black text-white tracking-tight font-playfair bg-gradient-to-br from-white via-emerald-100 to-teal-200 bg-clip-text text-transparent">
-                            Trạm Đọc v1.2
+                            Trạm Đọc
                         </h1>
                     </div>
 
@@ -209,9 +177,19 @@ function MainApp() {
                             </svg>
                         </button>
 
+                        <button
+                            onClick={() => setShowInfo(true)}
+                            className="p-2 md:p-3 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 hover:text-blue-300 rounded-xl transition-all border border-blue-500/20 active:scale-95"
+                            title="Thông tin & Hướng dẫn"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 md:h-6 md:w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                        </button>
+
                         {user.role === 'ADMIN' && (
                             <button
-                                onClick={() => setShowAdmin(true)}
+                                onClick={() => navigate('/admin')}
                                 className="p-2 md:p-3 bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-400 hover:text-indigo-300 rounded-xl transition-all border border-indigo-500/20 active:scale-95"
                                 title="Quản trị Backend"
                             >
@@ -225,12 +203,20 @@ function MainApp() {
                         <div className="flex items-center gap-2">
                             <div className="flex flex-col items-end">
                                 <span className="text-white font-bold text-[10px] md:text-sm leading-none mb-1 max-w-[70px] md:max-w-none truncate">{user.name || user.email.split('@')[0]}</span>
-                                <button
-                                    onClick={handleLogout}
-                                    className="text-[9px] text-red-400 font-black uppercase tracking-widest"
-                                >
-                                    Thoát
-                                </button>
+                                <div className="flex gap-2">
+                                    <button
+                                        onClick={() => setShowPasswordModal(true)}
+                                        className="text-[9px] text-blue-400 font-black uppercase tracking-widest hover:text-blue-300 transition-colors"
+                                    >
+                                        Mật khẩu
+                                    </button>
+                                    <button
+                                        onClick={handleLogout}
+                                        className="text-[9px] text-red-400 font-black uppercase tracking-widest hover:text-red-300 transition-colors"
+                                    >
+                                        Thoát
+                                    </button>
+                                </div>
                             </div>
                             {user.avatarUrl && !avatarError ? (
                                 <img
@@ -282,7 +268,7 @@ function MainApp() {
                     <div className="mb-4">
                         <div className="flex items-center justify-between mb-4 px-1">
                             <h3 className="text-xs font-black text-emerald-500 uppercase tracking-[0.3em]">
-                                {inProgressBooks.length > 0 ? 'Tiếp tục nghe' : 'Sách vừa xem'}
+                                {heroBooks.some(b => (b.progress || 0) > 0) ? 'Tiếp tục nghe' : 'Sách mới nhất'}
                             </h3>
                             {heroBooks.length > 1 && (
                                 <div className="flex gap-1.5 bg-slate-800/50 px-2 py-1 rounded-full border border-white/5 backdrop-blur-sm">
@@ -314,24 +300,27 @@ function MainApp() {
                                 >
                                     {/* Cinematic Background */}
                                     <div className="absolute inset-0 z-0">
-                                        {heroBook.coverImageUrl && (
-                                            <img src={`${API_BASE_URL}${heroBook.coverImageUrl}`} alt="" className="w-full h-full object-cover blur-[80px] opacity-40 scale-150" />
-                                        )}
+                                        <img
+                                            src={heroBook.cover ? URL.createObjectURL(heroBook.cover) : (heroBook.coverImageUrl ? `${API_BASE_URL}${heroBook.coverImageUrl}` : '/default-cover.png')}
+                                            alt=""
+                                            className="w-full h-full object-cover blur-[80px] opacity-40 scale-150"
+                                        />
                                         <div className="absolute inset-0 bg-gradient-to-b from-slate-900/40 via-slate-900/60 to-slate-900" />
                                     </div>
 
                                     <div className="relative z-10 flex flex-col p-5 md:p-8">
                                         <div className="flex flex-row items-start gap-6 w-full text-left">
                                             <div className="w-44 md:w-64 aspect-[2/3] flex-shrink-0 relative">
-                                                {heroBook.coverImageUrl ? (
-                                                    <img
-                                                        src={`${API_BASE_URL}${heroBook.coverImageUrl}`}
-                                                        className="h-full w-full object-cover rounded-xl shadow-2xl border border-white/10"
-                                                        alt={heroBook.title}
-                                                    />
-                                                ) : (
-                                                    <div className="w-full h-full bg-slate-800 rounded-xl flex items-center justify-center border border-white/10">
-                                                        <span className="text-3xl">📘</span>
+                                                <img
+                                                    src={heroBook.cover ? URL.createObjectURL(heroBook.cover) : (heroBook.coverImageUrl ? `${API_BASE_URL}${heroBook.coverImageUrl}` : '/default-cover.png')}
+                                                    className="h-full w-full object-cover rounded-xl shadow-2xl border border-white/10"
+                                                    alt={heroBook.title}
+                                                />
+                                                {!heroBook.cover && !heroBook.coverImageUrl && (
+                                                    <div className="absolute inset-0 flex flex-col items-center justify-center p-4 text-center pointer-events-none rounded-xl overflow-hidden">
+                                                        <div className="absolute inset-0 bg-black/40" />
+                                                        <h3 className="text-white font-playfair font-black text-2xl leading-tight line-clamp-3 mb-2 drop-shadow-md z-10 uppercase tracking-wide">{heroBook.title}</h3>
+                                                        <p className="text-white/80 font-serif text-sm line-clamp-2 drop-shadow-md z-10">{heroBook.author || 'Khuyết danh'}</p>
                                                     </div>
                                                 )}
                                             </div>
@@ -345,7 +334,7 @@ function MainApp() {
                                                     </p>
 
                                                     {heroBook.currentText && (
-                                                        <p className="text-slate-200 text-xs md:text-base italic line-clamp-3 md:line-clamp-4 font-serif leading-relaxed border-l-4 border-emerald-500/30 pl-4 mb-6">
+                                                        <p className="text-slate-200 text-sm md:text-lg italic line-clamp-3 md:line-clamp-4 font-serif leading-relaxed border-l-4 border-emerald-500/30 pl-4 mb-6">
                                                             "{heroBook.currentText}..."
                                                         </p>
                                                     )}
@@ -463,19 +452,15 @@ function MainApp() {
                 </main>
             </div>
 
-            {deleteConfirm && (
-                <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-                    <div className="bg-slate-900 rounded-2xl p-8 max-w-md w-full border border-slate-700 shadow-2xl">
-                        <h3 className="text-2xl font-bold text-white mb-4">Xóa sách?</h3>
-                        <p className="text-slate-400 mb-2">Bạn có chắc chắn muốn xóa cuốn sách:</p>
-                        <p className="text-emerald-400 font-semibold mb-6">"{deleteConfirm.title}"</p>
-                        <div className="flex gap-4">
-                            <button onClick={() => setDeleteConfirm(null)} className="flex-1 bg-slate-800 py-3 rounded-xl">Hủy</button>
-                            <button onClick={confirmDelete} className="flex-1 bg-red-500 text-white py-3 rounded-xl">Xóa</button>
-                        </div>
-                    </div>
-                </div>
-            )}
+            <ConfirmModal
+                isOpen={deleteConfirm !== null}
+                onClose={() => setDeleteConfirm(null)}
+                onConfirm={confirmDelete}
+                title="Xóa sách?"
+                message={`Bạn có chắc chắn muốn xóa cuốn sách "${deleteConfirm?.title}"?`}
+                variant="danger"
+                confirmLabel="Xóa ngay"
+            />
 
             {toast && (
                 <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[100] animate-in slide-in-from-bottom-8">
@@ -490,35 +475,38 @@ function MainApp() {
                 <Dashboard books={books} user={user} onClose={() => setShowDashboard(false)} />
             )}
 
-            {showAdmin && user && (
-                <AdminDashboard onClose={() => setShowAdmin(false)} />
-            )}
+            <InfoModal isOpen={showInfo} onClose={() => setShowInfo(false)} />
+            <PasswordModal
+                isOpen={showPasswordModal}
+                onClose={() => setShowPasswordModal(false)}
+                authAxios={authAxios}
+            />
         </div>
     );
 }
 
 function BookCard({ book, onSelect, onDelete }: { book: Book, onSelect: (id: number) => void, onDelete: (confirm: { bookId: number, title: string }) => void }) {
-    const isCompleted = (book.progress || 0) >= 100;
+    const isNew = !book.lastRead;
+    const isCompleted = (book.progress || 0) === 100;
     const inProgress = (book.progress || 0) > 0 && (book.progress || 0) < 100;
-    const isNew = !book.progress || book.progress === 0;
 
     return (
         <div
+            className="group relative flex flex-col bg-slate-900/40 rounded-2xl overflow-hidden border border-white/5 transition-all duration-500 cursor-pointer h-full hover:shadow-2xl hover:shadow-emerald-500/10 hover:border-white/10"
             onClick={() => onSelect(book.id)}
-            className="group relative bg-slate-900/40 rounded-xl overflow-hidden border border-white/5 hover:border-emerald-500/30 transition-all duration-500 cursor-pointer hover:-translate-y-1 hover:shadow-2xl hover:shadow-emerald-500/10 flex flex-col h-full"
-            title={book.title}
         >
             {/* Cover Image Container */}
             <div className="aspect-[2/3] w-full bg-slate-950 relative overflow-hidden">
-                {book.coverImageUrl ? (
-                    <img
-                        src={`${API_BASE_URL}${book.coverImageUrl}`}
-                        alt={book.title}
-                        className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105 group-hover:blur-[2px] group-hover:brightness-50"
-                    />
-                ) : (
-                    <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-slate-800 to-slate-900">
-                        <span className="text-4xl opacity-30 invert">📘</span>
+                <img
+                    src={book.cover ? URL.createObjectURL(book.cover) : (book.coverImageUrl ? `${API_BASE_URL}${book.coverImageUrl}` : '/default-cover.png')}
+                    alt={book.title}
+                    className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105 group-hover:blur-[2px] group-hover:brightness-50"
+                />
+                {!book.cover && !book.coverImageUrl && (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center p-4 text-center z-10 pointer-events-none">
+                        <div className="absolute inset-0 bg-black/40" />
+                        <h3 className="text-white font-playfair font-black text-xl leading-tight line-clamp-3 mb-2 drop-shadow-md z-10 uppercase tracking-wide">{book.title}</h3>
+                        <p className="text-white/80 font-serif text-sm line-clamp-2 drop-shadow-md z-10">{book.author || 'Khuyết danh'}</p>
                     </div>
                 )}
 
@@ -577,7 +565,7 @@ function BookCard({ book, onSelect, onDelete }: { book: Book, onSelect: (id: num
 
             {/* Content info */}
             <div className="p-3 flex-1 flex flex-col justify-start bg-gradient-to-b from-transparent to-slate-900/30">
-                <h3 className="text-white font-playfair font-bold leading-tight mb-1 truncate group-hover:text-emerald-400 transition-colors">
+                <h3 className="text-white font-playfair font-bold leading-tight mb-1 truncate group-hover:text-emerald-400 transition-colors uppercase tracking-tight">
                     {book.title}
                 </h3>
                 <p className="text-slate-500 text-xs truncate font-medium">
@@ -589,10 +577,66 @@ function BookCard({ book, onSelect, onDelete }: { book: Book, onSelect: (id: num
 }
 
 function App() {
+    const [user, setUser] = useState<User | null>(null);
+    const [books, setBooks] = useState<Book[]>([]);
+    const [loading, setLoading] = useState(true);
+
+    const token = localStorage.getItem('audiobook_token');
+    const authAxios = axios.create({
+        baseURL: API_BASE_URL,
+        headers: { Authorization: `Bearer ${token}` }
+    });
+
+    const loadBooks = async () => {
+        try {
+            const res = await authAxios.get('/api/books');
+            setBooks(res.data);
+        } catch (error) {
+            const offBooks = await getAllOfflineBooks();
+            if (offBooks) setBooks(offBooks as any[]);
+        }
+    };
+
+    useEffect(() => {
+        const checkAuth = async () => {
+            if (!token) {
+                setLoading(false);
+                return;
+            }
+            try {
+                const res = await authAxios.get('/api/auth/me');
+                setUser(res.data);
+                const booksRes = await authAxios.get('/api/books');
+                setBooks(booksRes.data);
+            } catch (e: any) {
+                if (e.response && (e.response.status === 401 || e.response.status === 403)) {
+                    localStorage.removeItem('audiobook_token');
+                    setUser(null);
+                } else {
+                    const offBooks = await getAllOfflineBooks();
+                    if (offBooks) setBooks(offBooks as any[]);
+                }
+            } finally {
+                setLoading(false);
+            }
+        };
+        checkAuth();
+    }, [token]);
+
     return (
         <BrowserRouter>
             <Routes>
-                <Route path="/" element={<MainApp />} />
+                <Route path="/" element={
+                    <MainApp
+                        user={user!}
+                        setUser={setUser}
+                        books={books}
+                        loadBooks={loadBooks}
+                        authAxios={authAxios}
+                        loading={loading}
+                    />
+                } />
+                <Route path="/admin" element={user?.role === 'ADMIN' ? <AdminDashboard /> : <Navigate to="/" />} />
                 <Route path="/auth-success" element={<AuthSuccess />} />
                 <Route path="*" element={<Navigate to="/" />} />
             </Routes>

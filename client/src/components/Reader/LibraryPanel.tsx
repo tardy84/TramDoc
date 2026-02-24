@@ -28,6 +28,7 @@ interface LibraryPanelProps {
     isOfflineAvailable: boolean;
     downloadingOffline: boolean;
     downloadOffline: () => void;
+    onSwitchBook?: (id: number) => void;
 }
 
 const LibraryPanel: React.FC<LibraryPanelProps> = ({
@@ -55,7 +56,8 @@ const LibraryPanel: React.FC<LibraryPanelProps> = ({
     fontFamily,
     isOfflineAvailable,
     downloadingOffline,
-    downloadOffline
+    downloadOffline,
+    onSwitchBook
 }) => {
     if (!showLibrary) return null;
 
@@ -192,8 +194,14 @@ const LibraryPanel: React.FC<LibraryPanelProps> = ({
                         ) : (
                             offlineBooks.map((offBook) => (
                                 <div key={offBook.id} className={`rounded-2xl p-4 border flex items-center gap-3 ${theme === 'sepia' ? 'bg-amber-900/5 border-amber-900/10' : 'bg-white/5 border-white/10'}`}>
-                                    <div className="w-10 h-14 bg-slate-800 rounded overflow-hidden flex-shrink-0">
-                                        {offBook.coverImageUrl && <img src={`${API_BASE_URL}${offBook.coverImageUrl}`} className="w-full h-full object-cover" alt="" />}
+                                    <div className="w-10 h-14 bg-slate-800 rounded overflow-hidden flex-shrink-0 relative">
+                                        <img src={offBook.coverImageUrl ? `${API_BASE_URL}${offBook.coverImageUrl}` : '/default-cover.png'} className="w-full h-full object-cover" alt="" />
+                                        {!offBook.coverImageUrl && (
+                                            <div className="absolute inset-0 flex flex-col items-center justify-center p-1 text-center pointer-events-none">
+                                                <div className="absolute inset-0 bg-black/40" />
+                                                <span className="text-white font-black text-[7px] leading-tight line-clamp-2 drop-shadow-md z-10 uppercase tracking-widest">{offBook.title}</span>
+                                            </div>
+                                        )}
                                     </div>
                                     <div className="flex-1 min-w-0">
                                         <h4 className="text-sm font-bold truncate text-white">{offBook.title}</h4>
@@ -202,7 +210,7 @@ const LibraryPanel: React.FC<LibraryPanelProps> = ({
                                             <button
                                                 onClick={() => {
                                                     if (offBook.id === bookId) setShowLibrary(false);
-                                                    else window.location.href = `/?bookId=${offBook.id}`;
+                                                    else if (onSwitchBook) onSwitchBook(offBook.id);
                                                 }}
                                                 className="text-[10px] font-bold text-emerald-500 uppercase tracking-wider"
                                             >
@@ -226,7 +234,7 @@ const LibraryPanel: React.FC<LibraryPanelProps> = ({
                     </div>
                 )}
             </div>
-        </div>
+        </div >
     );
 };
 

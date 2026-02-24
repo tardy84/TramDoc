@@ -39,14 +39,34 @@ export const useReaderAudio = ({
     const [browserTTSMode, setBrowserTTSMode] = useState(false);
 
     const audioRef = useRef<HTMLAudioElement | null>(null);
+    const preloadAudioRef = useRef<HTMLAudioElement | null>(null);
+    const nextAudioIndexRef = useRef<number | null>(null);
+    const preloadTimeoutRef = useRef<any>(null);
     const abortControllerRef = useRef<AbortController | null>(null);
     const activeChapterIdRef = useRef<number | null>(null);
+    const queuedIndicesRef = useRef<Set<number>>(new Set());
 
-    const playBrowserTTS = useCallback((index: number) => {
+    const playBrowserTTS = useCallback((index: number, isAutoProgress = false) => {
         const chapter = chapters[currentChapterIndex];
         if (!chapter || !chapter.segments[index]) return;
 
-        window.speechSynthesis.cancel();
+        if (!isAutoProgress) {
+            window.speechSynthesis.cancel();
+            queuedIndicesRef.current.clear();
+        }
+
+        // Maintain a queue of 3 items to ensure browser has enough "lookahead"
+        const queueNext = (currIdx: number) => {
+            for (let i = 1; i <= 3; i++) {
+                const nextIdx = currIdx + i;
+                if (nextIdx < chapter.segments.length && !queuedIndicesRef.current.has(nextIdx)) {
+                    playBrowserTTS(nextIdx, true);
+                }
+            }
+        };
+
+        if (queuedIndicesRef.current.has(index)) return;
+
         const utterance = new SpeechSynthesisUtterance(chapter.segments[index].content);
         utterance.lang = 'vi-VN';
         utterance.rate = playbackSpeed;
@@ -54,67 +74,114 @@ export const useReaderAudio = ({
         utterance.onstart = () => {
             setIsPlaying(true);
             setCurrentSegmentIndex(index);
+            queueNext(index);
         };
 
         utterance.onend = () => {
-            if (index + 1 < chapter.segments.length) {
-                playBrowserTTS(index + 1);
-            } else {
+            queuedIndicesRef.current.delete(index);
+            if (index + 1 === chapter.segments.length) {
                 nextChapter();
             }
         };
 
+        queuedIndicesRef.current.add(index);
         window.speechSynthesis.speak(utterance);
     }, [chapters, currentChapterIndex, playbackSpeed, nextChapter, setCurrentSegmentIndex]);
 
-    const playAudio = useCallback(async (index: number, files: string[] = audioFiles) => {
-        if (!files || files.length === 0) return;
-        const intendedChapterId = chapters[currentChapterIndex]?.id;
-        activeChapterIdRef.current = intendedChapterId;
+    const playAudio = useCallback(async (index: number, files: string[] = audioFiles, retryCount = 0) => {
+        const chapterIdx = currentChapterIndex;
+        const chapterId = chapters[chapterIdx]?.id;
+        if (!chapterId) return;
+
+        activeChapterIdRef.current = chapterId;
         setCurrentSegmentIndex(index);
 
-        let url = '';
-        try {
-            const offlineBlob = await getOfflineAudio(bookId, chapters[currentChapterIndex].id, index);
-            if (offlineBlob) {
-                url = URL.createObjectURL(offlineBlob);
-            } else {
-                url = `${API_BASE_URL}${files[index]}`;
+        // helper to get the audio object (either preloaded or new)
+        const getAudioForIndex = async (idx: number) => {
+            if (nextAudioIndexRef.current === idx && preloadAudioRef.current) {
+                const preloaded = preloadAudioRef.current;
+                preloadAudioRef.current = null;
+                nextAudioIndexRef.current = null;
+                return preloaded;
             }
-        } catch (e) {
-            url = `${API_BASE_URL}${files[index]}`;
-        }
+
+            let offlineBlob = null;
+            try { offlineBlob = await getOfflineAudio(bookId, chapterId, idx); } catch (e) { }
+
+            let url = '';
+            if (offlineBlob) url = URL.createObjectURL(offlineBlob);
+            else if (files[idx]) url = `${API_BASE_URL}${files[idx]}`;
+
+            if (!url) return null;
+            const audio = new Audio(url);
+            audio.playbackRate = playbackSpeed;
+            audio.preload = 'auto';
+            return audio;
+        };
+
+        const preloadNext = async (idx: number) => {
+            if (idx >= files.length) {
+                // Potential to preload next chapter here
+                return;
+            }
+            if (nextAudioIndexRef.current === idx) return;
+            const nextAudio = await getAudioForIndex(idx);
+            if (nextAudio) {
+                nextAudio.load(); // Start buffering
+                preloadAudioRef.current = nextAudio;
+                nextAudioIndexRef.current = idx;
+            }
+        };
 
         const currentGlobal = getGlobalAudio();
         if (currentGlobal) {
-            const currentSrc = currentGlobal.src.split('?')[0];
-            const newSrc = url.split('?')[0];
-            if (currentSrc === newSrc) {
-                if (currentGlobal.paused) currentGlobal.play().catch(console.error);
-                audioRef.current = currentGlobal;
-                setIsPlaying(true);
-                return;
-            }
             currentGlobal.pause();
             setGlobalAudio(null);
         }
 
-        const audio = new Audio(url);
-        audio.playbackRate = playbackSpeed;
+        if (preloadTimeoutRef.current) {
+            clearTimeout(preloadTimeoutRef.current);
+            preloadTimeoutRef.current = null;
+        }
+
+        const audio = await getAudioForIndex(index);
+
+        if (!audio) {
+            // If the file is missing but we have a URL, maybe it's still generating
+            if (files[index] && retryCount < 5) {
+                setTimeout(() => playAudio(index, files, retryCount + 1), 1500);
+                return;
+            }
+            setBrowserTTSMode(true);
+            playBrowserTTS(index);
+            return;
+        }
+
         setGlobalAudio(audio);
         audioRef.current = audio;
 
         audio.onerror = () => {
-            setBrowserTTSMode(true);
-            playBrowserTTS(index);
+            if (retryCount < 5) {
+                setTimeout(() => playAudio(index, files, retryCount + 1), 1500);
+            } else {
+                setBrowserTTSMode(true);
+                playBrowserTTS(index);
+            }
         };
 
         audio.onended = () => {
-            if (activeChapterIdRef.current !== intendedChapterId) return;
-            if (index + 1 < files.length) {
+            if (activeChapterIdRef.current !== chapterId) return;
+            if (index + 1 < (files?.length || 0)) {
                 playAudio(index + 1, files);
             } else if (currentChapterIndex < chapters.length - 1) {
-                nextChapter();
+                // Check if the next chapter's data is available before calling nextChapter
+                const nextChapterData = chapters[currentChapterIndex + 1];
+                if (nextChapterData && nextChapterData.segments.length > 0) {
+                    nextChapter();
+                } else {
+                    // If next chapter data isn't ready, stop playback for now
+                    setIsPlaying(false);
+                }
             } else {
                 setIsPlaying(false);
             }
@@ -122,12 +189,26 @@ export const useReaderAudio = ({
 
         audio.play().catch(error => {
             if (error.name === 'AbortError') return;
-            if (activeChapterIdRef.current !== intendedChapterId) return;
-            setBrowserTTSMode(true);
-            playBrowserTTS(index);
+            if (activeChapterIdRef.current !== chapterId) return;
+            // Retry on play failure too (sometimes happens with ephemeral blobs)
+            if (retryCount < 3) {
+                setTimeout(() => playAudio(index, files, retryCount + 1), 500);
+            } else {
+                setBrowserTTSMode(true);
+                playBrowserTTS(index);
+            }
         });
 
         setIsPlaying(true);
+
+        // Preload next segment almost immediately for maximum buffering time
+        preloadTimeoutRef.current = setTimeout(() => {
+            if (activeChapterIdRef.current === chapterId) {
+                preloadNext(index + 1);
+            }
+            preloadTimeoutRef.current = null;
+        }, 100);
+
     }, [audioFiles, chapters, currentChapterIndex, nextChapter, playbackSpeed, bookId, playBrowserTTS, setCurrentSegmentIndex, getGlobalAudio, setGlobalAudio]);
 
     const generateAudio = useCallback(async (startFromIndex?: number) => {
