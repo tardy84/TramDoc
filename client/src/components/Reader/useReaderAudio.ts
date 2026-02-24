@@ -45,14 +45,21 @@ export const useReaderAudio = ({
     const abortControllerRef = useRef<AbortController | null>(null);
     const activeChapterIdRef = useRef<number | null>(null);
     const queuedIndicesRef = useRef<Set<number>>(new Set());
+    const playIdRef = useRef<number>(0);
 
-    const playBrowserTTS = useCallback((index: number, isAutoProgress = false) => {
+    const playBrowserTTS = useCallback((index: number) => {
         const chapter = chapters[currentChapterIndex];
         if (!chapter || !chapter.segments[index]) return;
 
-        if (!isAutoProgress) {
-            window.speechSynthesis.cancel();
-            queuedIndicesRef.current.clear();
+        // ALWAYs cancel whatever is playing first to prevent overlap
+        window.speechSynthesis.cancel();
+        queuedIndicesRef.current.clear();
+
+        const currentGlobal = getGlobalAudio();
+        if (currentGlobal) {
+            currentGlobal.pause();
+            currentGlobal.src = '';
+            setGlobalAudio(null);
         }
 
         // Maintain a queue of 3 items to ensure browser has enough "lookahead"
@@ -60,7 +67,7 @@ export const useReaderAudio = ({
             for (let i = 1; i <= 3; i++) {
                 const nextIdx = currIdx + i;
                 if (nextIdx < chapter.segments.length && !queuedIndicesRef.current.has(nextIdx)) {
-                    playBrowserTTS(nextIdx, true);
+                    playBrowserTTS(nextIdx);
                 }
             }
         };
@@ -88,10 +95,13 @@ export const useReaderAudio = ({
         window.speechSynthesis.speak(utterance);
     }, [chapters, currentChapterIndex, playbackSpeed, nextChapter, setCurrentSegmentIndex]);
 
-    const playAudio = useCallback(async (index: number, files: string[] = audioFiles, retryCount = 0) => {
+    const playAudio = useCallback(async (index: number, files: string[] = audioFiles, retryCount = 0, incomingPlayId?: number) => {
         const chapterIdx = currentChapterIndex;
         const chapterId = chapters[chapterIdx]?.id;
         if (!chapterId) return;
+
+        // Assign or inherit the current play ID for race condition prevention
+        const currentPlayId = incomingPlayId ?? ++playIdRef.current;
 
         activeChapterIdRef.current = chapterId;
         setCurrentSegmentIndex(index);
@@ -133,9 +143,13 @@ export const useReaderAudio = ({
             }
         };
 
+        window.speechSynthesis.cancel();
+        queuedIndicesRef.current.clear();
+
         const currentGlobal = getGlobalAudio();
         if (currentGlobal) {
             currentGlobal.pause();
+            currentGlobal.src = ''; // Clean up source memory
             setGlobalAudio(null);
         }
 
@@ -146,10 +160,17 @@ export const useReaderAudio = ({
 
         const audio = await getAudioForIndex(index);
 
+        // Abort if another play request has started since we started awaiting
+        if (currentPlayId !== playIdRef.current) return;
+
         if (!audio) {
             // If the file is missing but we have a URL, maybe it's still generating
             if (files[index] && retryCount < 5) {
-                setTimeout(() => playAudio(index, files, retryCount + 1), 1500);
+                setTimeout(() => {
+                    if (currentPlayId === playIdRef.current) {
+                        playAudio(index, files, retryCount + 1, currentPlayId);
+                    }
+                }, 1500);
                 return;
             }
             setBrowserTTSMode(true);
@@ -161,8 +182,13 @@ export const useReaderAudio = ({
         audioRef.current = audio;
 
         audio.onerror = () => {
+            if (currentPlayId !== playIdRef.current) return;
             if (retryCount < 5) {
-                setTimeout(() => playAudio(index, files, retryCount + 1), 1500);
+                setTimeout(() => {
+                    if (currentPlayId === playIdRef.current) {
+                        playAudio(index, files, retryCount + 1, currentPlayId);
+                    }
+                }, 1500);
             } else {
                 setBrowserTTSMode(true);
                 playBrowserTTS(index);
@@ -189,10 +215,15 @@ export const useReaderAudio = ({
 
         audio.play().catch(error => {
             if (error.name === 'AbortError') return;
+            if (currentPlayId !== playIdRef.current) return;
             if (activeChapterIdRef.current !== chapterId) return;
             // Retry on play failure too (sometimes happens with ephemeral blobs)
             if (retryCount < 3) {
-                setTimeout(() => playAudio(index, files, retryCount + 1), 500);
+                setTimeout(() => {
+                    if (currentPlayId === playIdRef.current) {
+                        playAudio(index, files, retryCount + 1, currentPlayId);
+                    }
+                }, 500);
             } else {
                 setBrowserTTSMode(true);
                 playBrowserTTS(index);
@@ -220,6 +251,17 @@ export const useReaderAudio = ({
         const controller = new AbortController();
         abortControllerRef.current = controller;
 
+        // Stop any currently playing audio immediately to prevent overlap while generating
+        window.speechSynthesis.cancel();
+        queuedIndicesRef.current.clear();
+
+        const currentGlobal = getGlobalAudio();
+        if (currentGlobal) {
+            currentGlobal.pause();
+            currentGlobal.src = '';
+            setGlobalAudio(null);
+        }
+
         setGenerating(true);
         setBrowserTTSMode(false);
         try {
@@ -235,8 +277,11 @@ export const useReaderAudio = ({
             setAudioFiles(newAudioFiles);
             setChapters(prev => prev.map((c, idx) => idx === currentChapterIndex ? { ...c, audioFiles: newAudioFiles } : c));
 
+            // Avoid racing with user clicks that happened during compilation
             const targetIndex = typeof startFromIndex === 'number' ? startFromIndex : currentSegmentIndex;
-            playAudio(Math.min(targetIndex, newAudioFiles.length - 1), newAudioFiles);
+            if (currentSegmentIndex === targetIndex) {
+                playAudio(Math.min(targetIndex, newAudioFiles.length - 1), newAudioFiles);
+            }
         } catch (error: any) {
             if (axios.isCancel(error)) return;
             setBrowserTTSMode(true);
