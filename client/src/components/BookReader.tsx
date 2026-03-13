@@ -1,7 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import axios from 'axios';
 import { getGlobalAudio, setGlobalAudio } from '../services/audioPlayer';
-import { saveBookOffline, saveChapterAudio, isBookOffline, getAllOfflineBooks, deleteOfflineBook, getOfflineBook } from '../services/offlineManager';
 
 // Sub-components
 import ReaderHeader from './Reader/ReaderHeader';
@@ -14,11 +12,13 @@ import BookmarkModal from './Reader/BookmarkModal';
 import { ThemeMode, Book, Chapter, Bookmark, Segment } from './Reader/types';
 import { useReaderAudio } from './Reader/useReaderAudio';
 import { useReaderProgress } from './Reader/useReaderProgress';
-import { API_BASE_URL } from '../constants';
+
+// Local database
+import { getBook, getBookmarks, createBookmark, deleteBookmark as deleteBookmarkApi } from '../services/apiService';
 
 const THEMES: Record<ThemeMode, { container: string, text: string, card: string, active: string, header: string, btn: string, backBtn: string, paper: string }> = {
     midnight: {
-        container: 'bg-[#0f172a]', // Dark Slate
+        container: 'bg-[#0f172a]',
         text: 'text-gray-200',
         card: 'bg-white/5 border-white/10',
         active: 'bg-indigo-500/20 text-indigo-200 ring-1 ring-indigo-500/30',
@@ -28,7 +28,7 @@ const THEMES: Record<ThemeMode, { container: string, text: string, card: string,
         paper: 'bg-[#1e293b]'
     },
     sepia: {
-        container: 'bg-[#f4ecd8]', // Classic Paper
+        container: 'bg-[#f4ecd8]',
         text: 'text-[#433429]',
         card: 'bg-[#ebe1c9] border-[#d3c2a3]',
         active: 'bg-[#d3c2a3] text-[#2c1d12] shadow-sm',
@@ -58,7 +58,7 @@ const THEMES: Record<ThemeMode, { container: string, text: string, card: string,
         paper: 'bg-black'
     },
     dark: {
-        container: 'bg-[#121212]', // Material Dark
+        container: 'bg-[#121212]',
         text: 'text-gray-300',
         card: 'bg-white/5 border-white/10',
         active: 'bg-blue-500/20 text-blue-200 ring-1 ring-blue-500/30',
@@ -71,12 +71,10 @@ const THEMES: Record<ThemeMode, { container: string, text: string, card: string,
 
 interface BookReaderProps {
     bookId: number;
-    token: string | null;
     onClose: () => void;
-    onSwitchBook?: (id: number) => void;
 }
 
-export default function BookReader({ bookId, token, onClose, onSwitchBook }: BookReaderProps) {
+export default function BookReader({ bookId, onClose }: BookReaderProps) {
     const [book, setBook] = useState<Book | null>(null);
     const [chapters, setChapters] = useState<Chapter[]>([]);
     const [currentChapterIndex, setCurrentChapterIndex] = useState(0);
@@ -89,8 +87,7 @@ export default function BookReader({ bookId, token, onClose, onSwitchBook }: Boo
     const [showControls, setShowControls] = useState(true);
     const [showSettings, setShowSettings] = useState(false);
     const [showLibrary, setShowLibrary] = useState(false);
-    const [libraryTab, setLibraryTab] = useState<'toc' | 'bookmarks' | 'offline'>('toc');
-    const [offlineBooks, setOfflineBooks] = useState<any[]>([]);
+    const [libraryTab, setLibraryTab] = useState<'toc' | 'bookmarks'>('toc');
     const [isRestored, setIsRestored] = useState(false);
 
     // Theme & Layout
@@ -104,18 +101,11 @@ export default function BookReader({ bookId, token, onClose, onSwitchBook }: Boo
     // Content & Bookmarks
     const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
     const [editingBookmark, setEditingBookmark] = useState<{ segment: Segment, chapterId: number, note: string } | null>(null);
-    const [isOfflineAvailable, setIsOfflineAvailable] = useState(false);
-    const [downloadingOffline, setDownloadingOffline] = useState(false);
 
     // Refs
     const segmentRefs = useRef<(HTMLParagraphElement | null)[]>([]);
     const pendingSegmentRef = useRef<number | null>(null);
     const lastScrollY = useRef(0);
-
-    const authAxios = axios.create({
-        baseURL: API_BASE_URL,
-        headers: { Authorization: `Bearer ${token}` }
-    });
 
     const showToast = useCallback((message: string, type: 'info' | 'error' | 'success' = 'info') => {
         setToast({ message, type });
@@ -138,7 +128,6 @@ export default function BookReader({ bookId, token, onClose, onSwitchBook }: Boo
                 setCurrentSegmentIndex(0);
             }
         },
-        authAxios,
         getGlobalAudio,
         setGlobalAudio
     });
@@ -153,43 +142,32 @@ export default function BookReader({ bookId, token, onClose, onSwitchBook }: Boo
         loading,
         isRestored,
         setIsRestored,
-        authAxios
     });
 
-    // Data Loading
+    // Data Loading from Server
     useEffect(() => {
         const loadBook = async () => {
             try {
-                const [bookRes, bookmarksRes, offlineStatus] = await Promise.all([
-                    authAxios.get(`/api/books/${bookId}`).catch(async (err) => {
-                        // Fallback to offline book metadata
-                        const offBook = await getOfflineBook(bookId);
-                        if (offBook) return { data: offBook };
-                        throw err;
-                    }),
-                    authAxios.get(`/api/books/${bookId}/bookmarks`).catch(() => ({ data: [] })),
-                    isBookOffline(bookId)
-                ]);
-                setBook(bookRes.data);
-                setChapters(bookRes.data.chapters);
-                setBookmarks(bookmarksRes.data);
-                setIsOfflineAvailable(offlineStatus);
+                const serverBook = await getBook(bookId);
+                if (!serverBook) {
+                    setError('Sách không tìm thấy.');
+                    setLoading(false);
+                    return;
+                }
+                setBook(serverBook as any);
+                setChapters(serverBook.chapters as any[]);
+
+                const serverBookmarks = await getBookmarks(bookId);
+                setBookmarks(serverBookmarks as Bookmark[]);
                 setLoading(false);
             } catch (e: any) {
                 console.error('Failed to load book:', e);
-                setError(e.message || 'Lỗi kết nối mạng và không có bản lưu offline.');
+                setError(e.message || 'Lỗi đọc dữ liệu sách.');
                 setLoading(false);
             }
         };
         loadBook();
     }, [bookId]);
-
-    // Load Offline Books when tab changes
-    useEffect(() => {
-        if (showLibrary && libraryTab === 'offline') {
-            getAllOfflineBooks().then(setOfflineBooks);
-        }
-    }, [showLibrary, libraryTab]);
 
     // Auto-Scroll Logic
     useEffect(() => {
@@ -200,8 +178,6 @@ export default function BookReader({ bookId, token, onClose, onSwitchBook }: Boo
             });
         }
     }, [currentSegmentIndex, theme]);
-
-
 
     // Sleep Timer Logic
     useEffect(() => {
@@ -243,7 +219,7 @@ export default function BookReader({ bookId, token, onClose, onSwitchBook }: Boo
         const existing = bookmarks.find(b => b.segmentId === segment.id);
         if (existing) {
             setBookmarks(prev => prev.filter(b => b.id !== existing.id));
-            await authAxios.delete(`/api/bookmarks/${existing.id}`);
+            await deleteBookmarkApi(existing.id);
         } else {
             setEditingBookmark({ segment, chapterId: chapters[currentChapterIndex].id, note: '' });
         }
@@ -252,62 +228,24 @@ export default function BookReader({ bookId, token, onClose, onSwitchBook }: Boo
     const saveBookmarkWithNote = async () => {
         if (!editingBookmark) return;
         try {
-            const res = await authAxios.post('/api/bookmarks', {
+            const bookmark = await createBookmark({
                 bookId,
                 chapterId: editingBookmark.chapterId,
                 segmentId: editingBookmark.segment.id,
                 previewText: editingBookmark.segment.content,
                 note: editingBookmark.note
             });
-            setBookmarks(prev => [res.data, ...prev]);
+            // Enrich with chapter info
+            const chapter = chapters.find(c => c.id === editingBookmark.chapterId);
+            const enriched = {
+                ...bookmark,
+                chapter: chapter ? { title: chapter.title, orderIndex: chapter.orderIndex } : { title: '', orderIndex: 0 }
+            };
+            setBookmarks(prev => [enriched as Bookmark, ...prev]);
             setEditingBookmark(null);
             showToast('Đã lưu dấu trang!', 'success');
         } catch (e) {
             showToast('Lỗi khi lưu dấu trang', 'error');
-        }
-    };
-
-    const downloadOffline = async () => {
-        if (!book) return;
-        setDownloadingOffline(true);
-        try {
-            // 1. Save metadata first
-            await saveBookOffline(book);
-
-            const currentChapter = chapters[currentChapterIndex];
-            let files = currentChapter.audioFiles;
-
-            // 2. If no audio files exist for this chapter, trigger generation first
-            if (!files || files.length === 0) {
-                showToast('Đang khởi tạo âm thanh trước khi tải về...', 'info');
-                const res = await authAxios.post(
-                    `/api/books/${bookId}/chapters/${currentChapter.id}/tts`,
-                    { voice: selectedVoice }
-                );
-                files = res.data.audioFiles;
-
-                // Update chapters list with the new audio files
-                setChapters(prev => prev.map((c, i) => i === currentChapterIndex ? { ...c, audioFiles: files } : c));
-            }
-
-            // 3. Save audio blobs
-            if (files && files.length > 0) {
-                showToast(`Đang tải ${files.length} đoạn âm thanh...`, 'info');
-                await saveChapterAudio(book.id, currentChapter.id, files);
-            }
-
-            setIsOfflineAvailable(true);
-
-            // Refresh the offline list immediately
-            const updatedOffline = await getAllOfflineBooks();
-            setOfflineBooks(updatedOffline);
-
-            showToast('Chương truyện đã sẵn sàng để nghe offline!', 'success');
-        } catch (e: any) {
-            console.error('Download error:', e);
-            showToast('Lỗi khi tải sách: ' + (e.response?.data?.error || e.message), 'error');
-        } finally {
-            setDownloadingOffline(false);
         }
     };
 
@@ -355,11 +293,10 @@ export default function BookReader({ bookId, token, onClose, onSwitchBook }: Boo
             >
                 {currentChapter && (
                     <div className="max-w-3xl mx-auto">
-                        {/* Book Header Card (Only for Chapter 0) */}
                         {currentChapter.orderIndex === 0 && book && (
                             <div className="bg-white/10 backdrop-blur-md rounded-3xl p-8 border border-white/20 flex flex-col items-center justify-center mb-12 animate-in fade-in zoom-in duration-700">
                                 <div className="relative w-48 h-72 rounded-2xl shadow-2xl mb-6 overflow-hidden transform hover:scale-105 transition-transform duration-500">
-                                    <img src={book.coverImageUrl ? `${API_BASE_URL}${book.coverImageUrl}` : '/default-cover.png'} className="w-full h-full object-cover" alt="" />
+                                    <img src={book.coverImageUrl || '/default-cover.png'} className="w-full h-full object-cover" alt="" />
                                     {!book.coverImageUrl && (
                                         <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center z-10 pointer-events-none">
                                             <div className="absolute inset-0 bg-black/40" />
@@ -375,7 +312,6 @@ export default function BookReader({ bookId, token, onClose, onSwitchBook }: Boo
                             </div>
                         )}
 
-                        {/* Reading Surface */}
                         <div className={`rounded-[40px] p-6 md:p-16 shadow-2xl transition-all duration-700 ${currentThemeStyles.paper} paper-texture shadow-black/20 overflow-hidden`}>
                             <div className="space-y-1 text-justify leading-relaxed md:leading-[2]">
                                 {currentChapter.segments.map((segment, index) => (
@@ -472,21 +408,12 @@ export default function BookReader({ bookId, token, onClose, onSwitchBook }: Boo
                 setCurrentSegmentIndex={setCurrentSegmentIndex}
                 bookmarks={bookmarks}
                 setBookmarks={setBookmarks}
-                offlineBooks={offlineBooks}
-                setOfflineBooks={setOfflineBooks}
                 bookId={bookId}
                 playAudio={audio.playAudio}
                 generateAudio={audio.generateAudio}
-                deleteOfflineBook={deleteOfflineBook}
-                setIsOfflineAvailable={setIsOfflineAvailable}
-                isOfflineAvailable={isOfflineAvailable}
-                downloadingOffline={downloadingOffline}
-                downloadOffline={downloadOffline}
                 audioFiles={audio.audioFiles}
                 pendingSegmentRef={pendingSegmentRef}
-                authAxios={authAxios}
                 fontFamily={fontFamily}
-                onSwitchBook={onSwitchBook}
             />
 
             <BookmarkModal

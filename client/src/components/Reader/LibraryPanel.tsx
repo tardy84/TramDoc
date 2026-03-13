@@ -1,12 +1,12 @@
 import React from 'react';
 import { ThemeMode, Chapter, Bookmark } from './types';
-import { API_BASE_URL } from '../../constants';
+import { deleteBookmark as deleteBookmarkApi } from '../../services/apiService';
 
 interface LibraryPanelProps {
     showLibrary: boolean;
     setShowLibrary: (show: boolean) => void;
-    libraryTab: 'toc' | 'bookmarks' | 'offline';
-    setLibraryTab: (tab: 'toc' | 'bookmarks' | 'offline') => void;
+    libraryTab: 'toc' | 'bookmarks';
+    setLibraryTab: (tab: 'toc' | 'bookmarks') => void;
     theme: ThemeMode;
     chapters: Chapter[];
     currentChapterIndex: number;
@@ -14,21 +14,12 @@ interface LibraryPanelProps {
     setCurrentSegmentIndex: (index: number) => void;
     bookmarks: Bookmark[];
     setBookmarks: React.Dispatch<React.SetStateAction<Bookmark[]>>;
-    offlineBooks: any[];
-    setOfflineBooks: React.Dispatch<React.SetStateAction<any[]>>;
-    bookId: number;
     playAudio: (index: number) => void;
     generateAudio: (index: number) => void;
-    deleteOfflineBook: (id: number) => Promise<void>;
-    setIsOfflineAvailable: (available: boolean) => void;
     audioFiles: string[];
     pendingSegmentRef: React.MutableRefObject<number | null>;
-    authAxios: any;
     fontFamily: string;
-    isOfflineAvailable: boolean;
-    downloadingOffline: boolean;
-    downloadOffline: () => void;
-    onSwitchBook?: (id: number) => void;
+    bookId: number;
 }
 
 const LibraryPanel: React.FC<LibraryPanelProps> = ({
@@ -43,50 +34,36 @@ const LibraryPanel: React.FC<LibraryPanelProps> = ({
     setCurrentSegmentIndex,
     bookmarks,
     setBookmarks,
-    offlineBooks,
-    setOfflineBooks,
-    bookId,
     playAudio,
     generateAudio,
-    deleteOfflineBook,
-    setIsOfflineAvailable,
     audioFiles,
     pendingSegmentRef,
-    authAxios,
-    fontFamily,
-    isOfflineAvailable,
-    downloadingOffline,
-    downloadOffline,
-    onSwitchBook
+    fontFamily
 }) => {
     if (!showLibrary) return null;
 
     return (
         <div className={`fixed top-20 right-4 w-80 md:w-96 rounded-[32px] shadow-2xl overflow-hidden z-50 animate-in fade-in zoom-in-95 duration-200 border ${theme === 'sepia' ? 'bg-[#ebe1c9] border-[#d3c2a3]' : 'bg-black/95 border-white/20'}`}>
             {/* Tabs */}
-            <div className="flex border-b border-white/10">
+            <div className={`flex border-b ${theme === 'sepia' ? 'border-[#d3c2a3]' : 'border-white/10'}`}>
                 <button
                     onClick={() => setLibraryTab('toc')}
-                    className={`flex-1 py-4 text-lg transition-all ${libraryTab === 'toc' ? (theme === 'sepia' ? 'bg-[#d3c2a3] text-[#433429]' : 'bg-white/10 text-white') : 'opacity-40 hover:opacity-100'}`}
+                    className={`flex-1 py-4 flex items-center justify-center transition-all ${libraryTab === 'toc' ? (theme === 'sepia' ? 'bg-[#d3c2a3] text-[#433429]' : 'bg-white/10 text-white') : 'opacity-40 hover:opacity-100'}`}
                     title="Mục lục"
                 >
-                    📖
+                    <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/></svg>
                 </button>
                 <button
                     onClick={() => setLibraryTab('bookmarks')}
-                    className={`flex-1 py-4 text-lg transition-all ${libraryTab === 'bookmarks' ? 'bg-yellow-500/20 text-yellow-500' : 'opacity-40 hover:opacity-100'}`}
+                    className={`flex-1 py-4 flex items-center justify-center transition-all ${libraryTab === 'bookmarks' ? 'bg-emerald-500/20 text-emerald-500' : 'opacity-40 hover:opacity-100'}`}
                     title="Dấu trang"
                 >
-                    🔖
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg>
                 </button>
-                <button
-                    onClick={() => setLibraryTab('offline')}
-                    className={`flex-1 py-4 text-lg transition-all ${libraryTab === 'offline' ? 'bg-emerald-500/20 text-emerald-500' : 'opacity-40 hover:opacity-100'}`}
-                    title="Offline"
-                >
-                    📥
+
+                <button onClick={() => setShowLibrary(false)} className="px-4 flex items-center justify-center opacity-40 hover:opacity-100 transition-opacity">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
                 </button>
-                <button onClick={() => setShowLibrary(false)} className="px-4 opacity-40 hover:opacity-100 transition-opacity">✕</button>
             </div>
 
             <div className="h-[480px] overflow-y-auto no-scrollbar">
@@ -149,9 +126,13 @@ const LibraryPanel: React.FC<LibraryPanelProps> = ({
                                         <p className={`text-sm italic line-clamp-3 ${theme === 'sepia' ? 'text-[#5b4636]' : 'text-gray-300'}`}>"{bookmark.previewText}"</p>
                                     </div>
                                     <button
-                                        onClick={() => {
-                                            setBookmarks(prev => prev.filter(b => b.id !== bookmark.id));
-                                            authAxios.delete(`/api/bookmarks/${bookmark.id}`);
+                                        onClick={async () => {
+                                            try {
+                                                await deleteBookmarkApi(bookmark.id);
+                                                setBookmarks(prev => prev.filter(b => b.id !== bookmark.id));
+                                            } catch (err) {
+                                                console.error('Failed to delete bookmark:', err);
+                                            }
                                         }}
                                         className="mt-3 text-[10px] font-bold text-red-400/60 hover:text-red-400 transition-colors uppercase tracking-widest"
                                     >
@@ -161,78 +142,7 @@ const LibraryPanel: React.FC<LibraryPanelProps> = ({
                             ))
                         )}
                     </div>
-                ) : (
-                    <div className="p-4 space-y-4 pb-10">
-                        {/* Current Book Download Option */}
-                        <div className={`p-4 rounded-2xl border flex flex-col items-center justify-center gap-3 mb-6 transition-all duration-500 ${theme === 'sepia' ? 'bg-[#d3c2a3]/30 border-amber-900/10' : 'bg-white/5 border-white/10'}`}>
-                            {isOfflineAvailable ? (
-                                <div className="w-full flex items-center justify-center gap-2 px-6 py-3 rounded-xl text-[10px] font-bold uppercase tracking-widest border border-emerald-500/20 bg-emerald-500/5 text-emerald-500">
-                                    ✅ Đã tải về máy
-                                </div>
-                            ) : (
-                                <button
-                                    onClick={downloadOffline}
-                                    disabled={downloadingOffline}
-                                    className={`w-full flex items-center justify-center gap-2 px-6 py-3 rounded-xl text-xs font-bold uppercase tracking-widest transition-all border ${theme === 'sepia' ? 'bg-amber-900/10 border-amber-900/20 text-amber-900 hover:bg-amber-900/20' : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20'}`}
-                                >
-                                    {downloadingOffline ? (
-                                        <>
-                                            <div className="h-4 w-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
-                                            Đang xử lý...
-                                        </>
-                                    ) : (
-                                        <>📥 Tải về máy</>
-                                    )}
-                                </button>
-                            )}
-                        </div>
-
-                        <h4 className="text-[10px] font-black uppercase tracking-widest opacity-30 px-2 mt-4">Sách đã lưu</h4>
-
-                        {offlineBooks.length === 0 ? (
-                            <div className="py-20 text-center opacity-40 text-sm">Chưa có sách tải về</div>
-                        ) : (
-                            offlineBooks.map((offBook) => (
-                                <div key={offBook.id} className={`rounded-2xl p-4 border flex items-center gap-3 ${theme === 'sepia' ? 'bg-amber-900/5 border-amber-900/10' : 'bg-white/5 border-white/10'}`}>
-                                    <div className="w-10 h-14 bg-slate-800 rounded overflow-hidden flex-shrink-0 relative">
-                                        <img src={offBook.coverImageUrl ? `${API_BASE_URL}${offBook.coverImageUrl}` : '/default-cover.png'} className="w-full h-full object-cover" alt="" />
-                                        {!offBook.coverImageUrl && (
-                                            <div className="absolute inset-0 flex flex-col items-center justify-center p-1 text-center pointer-events-none">
-                                                <div className="absolute inset-0 bg-black/40" />
-                                                <span className="text-white font-black text-[7px] leading-tight line-clamp-2 drop-shadow-md z-10 uppercase tracking-widest">{offBook.title}</span>
-                                            </div>
-                                        )}
-                                    </div>
-                                    <div className="flex-1 min-w-0">
-                                        <h4 className="text-sm font-bold truncate text-white">{offBook.title}</h4>
-                                        <p className="text-[10px] opacity-40 mb-2">Tải về: {new Date(offBook.downloadedAt).toLocaleDateString()}</p>
-                                        <div className="flex gap-3">
-                                            <button
-                                                onClick={() => {
-                                                    if (offBook.id === bookId) setShowLibrary(false);
-                                                    else if (onSwitchBook) onSwitchBook(offBook.id);
-                                                }}
-                                                className="text-[10px] font-bold text-emerald-500 uppercase tracking-wider"
-                                            >
-                                                Đọc ngay
-                                            </button>
-                                            <button
-                                                onClick={async () => {
-                                                    await deleteOfflineBook(offBook.id);
-                                                    setOfflineBooks(prev => prev.filter(b => b.id !== offBook.id));
-                                                    if (offBook.id === bookId) setIsOfflineAvailable(false);
-                                                }}
-                                                className="text-[10px] font-bold text-red-400/60 hover:text-red-400 uppercase tracking-wider"
-                                            >
-                                                Gỡ bỏ
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
-                            ))
-                        )}
-                    </div>
-                )}
+) : null}
             </div>
         </div >
     );

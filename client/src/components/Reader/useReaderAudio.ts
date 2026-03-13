@@ -1,8 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import axios from 'axios';
 import { Chapter } from './types';
-import { getOfflineAudio } from '../../services/offlineManager';
-import { API_BASE_URL } from '../../constants';
+
 
 interface UseReaderAudioProps {
     bookId: number;
@@ -14,7 +12,6 @@ interface UseReaderAudioProps {
     playbackSpeed: number;
     selectedVoice: string;
     nextChapter: () => void;
-    authAxios: any;
     getGlobalAudio: () => HTMLAudioElement | null;
     setGlobalAudio: (audio: HTMLAudioElement | null) => void;
 }
@@ -29,7 +26,6 @@ export const useReaderAudio = ({
     playbackSpeed,
     selectedVoice,
     nextChapter,
-    authAxios,
     getGlobalAudio,
     setGlobalAudio
 }: UseReaderAudioProps) => {
@@ -46,12 +42,13 @@ export const useReaderAudio = ({
     const activeChapterIdRef = useRef<number | null>(null);
     const queuedIndicesRef = useRef<Set<number>>(new Set());
     const playIdRef = useRef<number>(0);
+    // Map of segment index -> URL for current chapter
+    const activeUrlMapRef = useRef<Map<number, string>>(new Map());
 
     const playBrowserTTS = useCallback((index: number) => {
         const chapter = chapters[currentChapterIndex];
         if (!chapter || !chapter.segments[index]) return;
 
-        // ALWAYs cancel whatever is playing first to prevent overlap
         window.speechSynthesis.cancel();
         queuedIndicesRef.current.clear();
 
@@ -62,7 +59,6 @@ export const useReaderAudio = ({
             setGlobalAudio(null);
         }
 
-        // Maintain a queue of 3 items to ensure browser has enough "lookahead"
         const queueNext = (currIdx: number) => {
             for (let i = 1; i <= 3; i++) {
                 const nextIdx = currIdx + i;
@@ -95,19 +91,18 @@ export const useReaderAudio = ({
         window.speechSynthesis.speak(utterance);
     }, [chapters, currentChapterIndex, playbackSpeed, nextChapter, setCurrentSegmentIndex]);
 
-    const playAudio = useCallback(async (index: number, files: string[] = audioFiles, retryCount = 0, incomingPlayId?: number) => {
+    const playAudio = useCallback(async (index: number, _files: string[] = audioFiles, retryCount = 0, incomingPlayId?: number) => {
         const chapterIdx = currentChapterIndex;
-        const chapterId = chapters[chapterIdx]?.id;
-        if (!chapterId) return;
+        const chapter = chapters[chapterIdx];
+        if (!chapter) return;
+        const chapterId = chapter.id;
 
-        // Assign or inherit the current play ID for race condition prevention
         const currentPlayId = incomingPlayId ?? ++playIdRef.current;
-
         activeChapterIdRef.current = chapterId;
         setCurrentSegmentIndex(index);
 
-        // helper to get the audio object (either preloaded or new)
-        const getAudioForIndex = async (idx: number) => {
+        const getAudioForIndex = async (idx: number): Promise<HTMLAudioElement | null> => {
+            // Check preloaded
             if (nextAudioIndexRef.current === idx && preloadAudioRef.current) {
                 const preloaded = preloadAudioRef.current;
                 preloadAudioRef.current = null;
@@ -115,12 +110,12 @@ export const useReaderAudio = ({
                 return preloaded;
             }
 
-            let offlineBlob = null;
-            try { offlineBlob = await getOfflineAudio(bookId, chapterId, idx); } catch (e) { }
+            // Check URL map
+            let url = activeUrlMapRef.current.get(idx);
 
-            let url = '';
-            if (offlineBlob) url = URL.createObjectURL(offlineBlob);
-            else if (files[idx]) url = `${API_BASE_URL}${files[idx]}`;
+            if (!url && _files && _files[idx]) {
+                url = _files[idx];
+            }
 
             if (!url) return null;
             const audio = new Audio(url);
@@ -130,26 +125,41 @@ export const useReaderAudio = ({
         };
 
         const preloadNext = async (idx: number) => {
-            if (idx >= files.length) {
-                // Potential to preload next chapter here
-                return;
-            }
+            if (idx >= chapter.segments.length) return;
             if (nextAudioIndexRef.current === idx) return;
+            
+            // Aggressive pre-fetch: Force the browser to start downloading the file into cache 
+            // BEFORE creating the audio element wait. This circumvents slow audio tag initialization.
+            const url = activeUrlMapRef.current.get(idx) || ( _files ? _files[idx] : null);
+            if (url) {
+                fetch(url).catch(() => {});
+            }
+
             const nextAudio = await getAudioForIndex(idx);
             if (nextAudio) {
-                nextAudio.load(); // Start buffering
+                nextAudio.load();
                 preloadAudioRef.current = nextAudio;
                 nextAudioIndexRef.current = idx;
             }
         };
 
-        window.speechSynthesis.cancel();
-        queuedIndicesRef.current.clear();
+        // Fast path: for sequential next segment, skip heavy cleanup
+        const isSequentialNext = incomingPlayId === undefined && retryCount === 0;
+        if (!isSequentialNext) {
+            window.speechSynthesis.cancel();
+            queuedIndicesRef.current.clear();
+        }
+
+        // Check if user paused before we start
+        if (currentPlayId !== playIdRef.current) return;
 
         const currentGlobal = getGlobalAudio();
         if (currentGlobal) {
+            // For sequential transitions, just pause without resetting src (faster)
             currentGlobal.pause();
-            currentGlobal.src = ''; // Clean up source memory
+            currentGlobal.onended = null;
+            currentGlobal.onerror = null;
+            if (!isSequentialNext) currentGlobal.src = '';
             setGlobalAudio(null);
         }
 
@@ -160,17 +170,15 @@ export const useReaderAudio = ({
 
         const audio = await getAudioForIndex(index);
 
-        // Abort if another play request has started since we started awaiting
         if (currentPlayId !== playIdRef.current) return;
 
         if (!audio) {
-            // If the file is missing but we have a URL, maybe it's still generating
-            if (files[index] && retryCount < 5) {
+            if (retryCount < 3) {
                 setTimeout(() => {
                     if (currentPlayId === playIdRef.current) {
-                        playAudio(index, files, retryCount + 1, currentPlayId);
+                        playAudio(index, _files, retryCount + 1, currentPlayId);
                     }
-                }, 1500);
+                }, 500);
                 return;
             }
             setBrowserTTSMode(true);
@@ -183,12 +191,12 @@ export const useReaderAudio = ({
 
         audio.onerror = () => {
             if (currentPlayId !== playIdRef.current) return;
-            if (retryCount < 5) {
+            if (retryCount < 3) {
                 setTimeout(() => {
                     if (currentPlayId === playIdRef.current) {
-                        playAudio(index, files, retryCount + 1, currentPlayId);
+                        playAudio(index, _files, retryCount + 1, currentPlayId);
                     }
-                }, 1500);
+                }, 500);
             } else {
                 setBrowserTTSMode(true);
                 playBrowserTTS(index);
@@ -197,15 +205,19 @@ export const useReaderAudio = ({
 
         audio.onended = () => {
             if (activeChapterIdRef.current !== chapterId) return;
-            if (index + 1 < (files?.length || 0)) {
-                playAudio(index + 1, files);
+            if (index + 1 < chapter.segments.length) {
+                // GAPLESS HACK: If we have preloaded the next segment, play it synchronously
+                // here inside the ending frame of the last audio, completely avoiding
+                // React event loop and state update delays.
+                if (nextAudioIndexRef.current === index + 1 && preloadAudioRef.current) {
+                    preloadAudioRef.current.play().catch(console.error);
+                }
+                playAudio(index + 1, _files);
             } else if (currentChapterIndex < chapters.length - 1) {
-                // Check if the next chapter's data is available before calling nextChapter
                 const nextChapterData = chapters[currentChapterIndex + 1];
                 if (nextChapterData && nextChapterData.segments.length > 0) {
                     nextChapter();
                 } else {
-                    // If next chapter data isn't ready, stop playback for now
                     setIsPlaying(false);
                 }
             } else {
@@ -216,12 +228,10 @@ export const useReaderAudio = ({
         audio.play().catch(error => {
             if (error.name === 'AbortError') return;
             if (currentPlayId !== playIdRef.current) return;
-            if (activeChapterIdRef.current !== chapterId) return;
-            // Retry on play failure too (sometimes happens with ephemeral blobs)
             if (retryCount < 3) {
                 setTimeout(() => {
                     if (currentPlayId === playIdRef.current) {
-                        playAudio(index, files, retryCount + 1, currentPlayId);
+                        playAudio(index, _files, retryCount + 1, currentPlayId);
                     }
                 }, 500);
             } else {
@@ -232,15 +242,12 @@ export const useReaderAudio = ({
 
         setIsPlaying(true);
 
-        // Preload next segment almost immediately for maximum buffering time
-        preloadTimeoutRef.current = setTimeout(() => {
-            if (activeChapterIdRef.current === chapterId) {
-                preloadNext(index + 1);
-            }
-            preloadTimeoutRef.current = null;
-        }, 100);
+        // Preload next segments immediately (no delay)
+        if (activeChapterIdRef.current === chapterId) {
+            preloadNext(index + 1);
+        }
 
-    }, [audioFiles, chapters, currentChapterIndex, nextChapter, playbackSpeed, bookId, playBrowserTTS, setCurrentSegmentIndex, getGlobalAudio, setGlobalAudio]);
+    }, [audioFiles, chapters, currentChapterIndex, nextChapter, playbackSpeed, bookId, selectedVoice, playBrowserTTS, setCurrentSegmentIndex, getGlobalAudio, setGlobalAudio]);
 
     const generateAudio = useCallback(async (startFromIndex?: number) => {
         if (chapters.length === 0) return;
@@ -251,7 +258,6 @@ export const useReaderAudio = ({
         const controller = new AbortController();
         abortControllerRef.current = controller;
 
-        // Stop any currently playing audio immediately to prevent overlap while generating
         window.speechSynthesis.cancel();
         queuedIndicesRef.current.clear();
 
@@ -264,26 +270,35 @@ export const useReaderAudio = ({
 
         setGenerating(true);
         setBrowserTTSMode(false);
+
         try {
-            const res = await authAxios.post(
-                `/api/books/${bookId}/chapters/${chapter.id}/tts`,
-                { voice: selectedVoice },
-                { signal: controller.signal }
+            // Zero-delay TTS Initialization!
+            // We instantly construct the URLs for all segments. The server's Express route
+            // /audio/:filename automatically catches 404s, generates them on-the-fly,
+            // and asynchronously triggers lookahead for the next 3 segments! No need to wait.
+            const timestamp = Date.now();
+            const urls = Array.from(
+                { length: chapter.segments.length },
+                (_, i) => `/audio/${bookId}_${chapter.id}_${selectedVoice}_${i}.mp3?t=${timestamp}`
             );
 
-            if (activeChapterIdRef.current !== chapter.id) return;
+            if (controller.signal.aborted || activeChapterIdRef.current !== chapter.id) return;
 
-            const newAudioFiles = res.data.audioFiles;
-            setAudioFiles(newAudioFiles);
-            setChapters(prev => prev.map((c, idx) => idx === currentChapterIndex ? { ...c, audioFiles: newAudioFiles } : c));
+            activeUrlMapRef.current.clear();
+            urls.forEach((url, i) => {
+                activeUrlMapRef.current.set(i, url);
+            });
 
-            // Avoid racing with user clicks that happened during compilation
+            setAudioFiles(urls);
+            setChapters(prev => prev.map((c, idx) => idx === currentChapterIndex ? { ...c, audioFiles: urls } : c));
+
+            // Start playing immediately from target
             const targetIndex = typeof startFromIndex === 'number' ? startFromIndex : currentSegmentIndex;
-            if (currentSegmentIndex === targetIndex) {
-                playAudio(Math.min(targetIndex, newAudioFiles.length - 1), newAudioFiles);
-            }
+            playAudio(targetIndex, urls);
+
         } catch (error: any) {
-            if (axios.isCancel(error)) return;
+            if (error.name === 'AbortError' || controller.signal.aborted) return;
+            console.error('[TTS] Server API Error:', error);
             setBrowserTTSMode(true);
             setGenerating(false);
             playBrowserTTS(typeof startFromIndex === 'number' ? startFromIndex : currentSegmentIndex);
@@ -293,10 +308,9 @@ export const useReaderAudio = ({
                 abortControllerRef.current = null;
             }
         }
-    }, [bookId, chapters, currentChapterIndex, currentSegmentIndex, playAudio, playBrowserTTS, authAxios, setChapters, selectedVoice]);
+    }, [bookId, chapters, currentChapterIndex, currentSegmentIndex, playAudio, playBrowserTTS, setChapters, selectedVoice, getGlobalAudio, setGlobalAudio]);
 
     const togglePlayPause = useCallback(() => {
-        const audio = audioRef.current;
         if (browserTTSMode) {
             if (isPlaying) {
                 window.speechSynthesis.pause();
@@ -308,24 +322,30 @@ export const useReaderAudio = ({
             return;
         }
 
-        if (audio) {
-            if (isPlaying) {
-                audio.pause();
-                setIsPlaying(false);
-            } else {
+        if (isPlaying) {
+            // Increment playId to cancel any pending onended chain
+            ++playIdRef.current;
+            // Pause all possible audio sources
+            const globalAudio = getGlobalAudio();
+            if (globalAudio) globalAudio.pause();
+            if (audioRef.current && audioRef.current !== globalAudio) audioRef.current.pause();
+            setIsPlaying(false);
+        } else {
+            const audio = audioRef.current;
+            if (audio && audio.src && !audio.ended) {
                 audio.play().catch(console.error);
                 setIsPlaying(true);
+            } else {
+                generateAudio();
             }
-        } else {
-            generateAudio();
         }
-    }, [browserTTSMode, isPlaying, generateAudio]);
+    }, [browserTTSMode, isPlaying, generateAudio, getGlobalAudio]);
 
     const nextSegment = useCallback(() => {
         const currentChapter = chapters[currentChapterIndex];
         if (currentChapter && currentSegmentIndex < currentChapter.segments.length - 1) {
             const nextIdx = currentSegmentIndex + 1;
-            if (audioFiles[nextIdx]) playAudio(nextIdx, audioFiles);
+            if (activeUrlMapRef.current.has(nextIdx)) playAudio(nextIdx, audioFiles);
             else generateAudio(nextIdx);
         } else {
             nextChapter();
@@ -335,19 +355,18 @@ export const useReaderAudio = ({
     const prevSegment = useCallback(() => {
         if (currentSegmentIndex > 0) {
             const nextIdx = currentSegmentIndex - 1;
-            if (audioFiles[nextIdx]) playAudio(nextIdx, audioFiles);
+            if (activeUrlMapRef.current.has(nextIdx)) playAudio(nextIdx, audioFiles);
             else generateAudio(nextIdx);
         }
     }, [currentSegmentIndex, audioFiles, playAudio, generateAudio]);
 
     const prevVoiceRef = useRef(selectedVoice);
 
-    // Auto-play trigger for chapter transitions or Voice changes
+    // Auto-play trigger for chapter transitions or voice changes
     useEffect(() => {
         const chapter = chapters[currentChapterIndex];
         if (!chapter) return;
 
-        // If voice changes AND we are playing/generating, restart with new voice
         if (prevVoiceRef.current !== selectedVoice) {
             prevVoiceRef.current = selectedVoice;
             const currentGlobal = getGlobalAudio();
@@ -356,14 +375,15 @@ export const useReaderAudio = ({
                 setGlobalAudio(null);
                 audioRef.current = null;
             }
-            if (isPlaying || audioFiles.length > 0) {
+            activeUrlMapRef.current.clear();
+            setAudioFiles([]);
+            if (isPlaying) {
                 generateAudio(currentSegmentIndex);
                 return;
             }
         }
 
         if (activeChapterIdRef.current !== chapter.id) {
-            // Chapter changed! Stop existing audio
             const currentGlobal = getGlobalAudio();
             if (currentGlobal) {
                 currentGlobal.pause();
@@ -371,8 +391,8 @@ export const useReaderAudio = ({
                 audioRef.current = null;
             }
             activeChapterIdRef.current = chapter.id;
+            activeUrlMapRef.current.clear();
             setAudioFiles(chapter.audioFiles || []);
-            // If it was playing, we need to trigger generation or play for the new chapter
             if (isPlaying) {
                 if (chapter.audioFiles && chapter.audioFiles.length > 0) {
                     playAudio(currentSegmentIndex, chapter.audioFiles);
@@ -381,10 +401,8 @@ export const useReaderAudio = ({
                 }
             }
         } else if (isPlaying) {
-            // Same chapter, just ensuring something is playing if it's supposed to
             const globalAudio = getGlobalAudio();
             if (!globalAudio || (globalAudio.paused && !globalAudio.ended && globalAudio.src)) {
-                // This handles cases where user clicked next/prev segment
                 playAudio(currentSegmentIndex, audioFiles);
             } else if (audioFiles.length === 0 && !generating) {
                 generateAudio(currentSegmentIndex);

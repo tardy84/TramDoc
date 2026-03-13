@@ -1,34 +1,26 @@
 import { useState, useEffect } from 'react';
-import axios from 'axios';
-import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import ConfirmModal from './components/Shared/ConfirmModal';
-import PasswordModal from './components/Auth/PasswordModal';
 import BookReader from './components/BookReader';
-import Auth from './components/Auth';
-import AuthSuccess from './components/AuthSuccess';
 import Dashboard from './components/Dashboard';
-import AdminDashboard from './components/Admin/AdminDashboard';
-import { API_BASE_URL } from './constants';
-import { getAllOfflineBooks, deleteOfflineBook } from './services/offlineManager';
 import InfoModal from './components/Reader/InfoModal';
-import { Book, User } from './types';
+import Auth from './components/Auth';
+import BookCard from './components/Library/BookCard';
+import HeroCarousel from './components/Library/HeroCarousel';
+import { Book } from './types';
+import { getAllBooks, deleteBook as deleteBookApi, uploadBook, getUploadStatus } from './services/apiService';
 
 function MainApp({
-    user,
-    setUser,
     books,
     loadBooks,
-    authAxios,
-    loading
+    loading,
+    onLogout
 }: {
-    user: User,
-    setUser: (u: User | null) => void,
     books: Book[],
     loadBooks: () => void,
-    authAxios: any,
-    loading: boolean
+    loading: boolean,
+    onLogout: () => void
 }) {
-    const navigate = useNavigate();
     const [uploading, setUploading] = useState(false);
     const [progress, setProgress] = useState(0);
     const [uploadStatus, setUploadStatus] = useState('');
@@ -41,8 +33,6 @@ function MainApp({
     const [activeHeroIndex, setActiveHeroIndex] = useState(0);
     const [showDashboard, setShowDashboard] = useState(false);
     const [showInfo, setShowInfo] = useState(false);
-    const [showPasswordModal, setShowPasswordModal] = useState(false);
-    const [avatarError, setAvatarError] = useState(false);
 
     const showToast = (message: string, type: 'success' | 'error' = 'success') => {
         setToast({ message, type });
@@ -53,41 +43,48 @@ function MainApp({
         const file = event.target.files?.[0];
         if (!file) return;
         if (!file.name.endsWith('.epub')) {
-            showToast('Please upload an EPUB file', 'error');
+            showToast('Vui lòng chọn file EPUB', 'error');
             return;
         }
 
+        const jobId = `job_${Date.now()}`;
         setUploading(true);
         setProgress(0);
-        setUploadStatus('Uploading file...');
-
-        const jobId = Math.random().toString(36).substring(7);
-        const formData = new FormData();
-        formData.append('book', file);
-        formData.append('jobId', jobId);
-
-        const pollInterval = setInterval(async () => {
-            try {
-                const statusRes = await authAxios.get(`/api/upload-status/${jobId}`);
-                setProgress(statusRes.data.progress);
-                setUploadStatus(statusRes.data.status);
-                if (statusRes.data.progress === 100 || statusRes.data.status === 'Error') clearInterval(pollInterval);
-            } catch (e) { }
-        }, 800);
+        setUploadStatus('Đang tải lên...');
 
         try {
-            await authAxios.post('/api/upload', formData);
-            loadBooks();
-            setUploadStatus('Complete');
-            setProgress(100);
-            setTimeout(() => {
-                setUploading(false);
-                showToast(`Book "${file.name}" processed successfully!`);
+            await uploadBook(file, jobId);
+            
+            // Poll for status
+            const pollInterval = setInterval(async () => {
+                try {
+                    const status = await getUploadStatus(jobId);
+                    setProgress(status.progress);
+                    setUploadStatus(status.status);
+
+                    if (status.progress === 100) {
+                        clearInterval(pollInterval);
+                        await loadBooks();
+                        setUploadStatus('Hoàn tất!');
+                        setTimeout(() => {
+                            setUploading(false);
+                            showToast(`Sách "${file.name}" đã xử lý thành công!`);
+                        }, 1000);
+                    } else if (status.error) {
+                        clearInterval(pollInterval);
+                        throw new Error(status.error);
+                    }
+                } catch (err: any) {
+                    clearInterval(pollInterval);
+                    setUploadStatus('Lỗi');
+                    showToast(err.message || 'Lỗi xử lý EPUB', 'error');
+                    setUploading(false);
+                }
             }, 1000);
+
         } catch (error: any) {
-            clearInterval(pollInterval);
-            setUploadStatus('Error');
-            showToast(error.response?.data?.error || error.message, 'error');
+            setUploadStatus('Lỗi');
+            showToast(error.message || 'Lỗi tải sách', 'error');
             setUploading(false);
         }
     };
@@ -95,35 +92,23 @@ function MainApp({
     const confirmDelete = async () => {
         if (!deleteConfirm) return;
         try {
-            await authAxios.delete(`/api/books/${deleteConfirm.bookId}`);
-            // Also cleanup offline storage if it exists
-            await deleteOfflineBook(deleteConfirm.bookId);
+            await deleteBookApi(deleteConfirm.bookId);
             showToast(`Sách "${deleteConfirm.title}" đã được xóa!`);
-            loadBooks();
+            await loadBooks();
         } catch (error: any) {
-            showToast(`Lỗi: ${error.response?.data?.error || error.message}`, 'error');
+            showToast(`Lỗi: ${error.message}`, 'error');
         } finally {
             setDeleteConfirm(null);
         }
     };
 
-    const handleLogout = () => {
-        localStorage.removeItem('audiobook_token');
-        setUser(null);
-        window.location.href = '/';
-    };
-
-    const token = localStorage.getItem('audiobook_token');
-
     if (loading) return <div className="min-h-screen bg-slate-900 flex items-center justify-center text-emerald-500 animate-pulse text-2xl font-black">TRẠM ĐỌC...</div>;
-    if (!user) return <Auth onLogin={(t, u) => { localStorage.setItem('audiobook_token', t); setUser(u); window.location.reload(); }} />;
 
     if (selectedBookId !== null) {
         return <BookReader
+            key={selectedBookId}
             bookId={selectedBookId}
-            token={token}
             onClose={() => { setSelectedBookId(null); loadBooks(); }}
-            onSwitchBook={(id) => setSelectedBookId(id)}
         />;
     }
 
@@ -143,7 +128,6 @@ function MainApp({
             return 0;
         });
 
-    // Author Grouping Logic
     const booksByAuthor = filteredAndSortedBooks.reduce((acc, book) => {
         const author = book.author || 'Tác giả ẩn danh';
         if (!acc[author]) acc[author] = [];
@@ -187,51 +171,15 @@ function MainApp({
                             </svg>
                         </button>
 
-                        {user.role === 'ADMIN' && (
-                            <button
-                                onClick={() => navigate('/admin')}
-                                className="p-2 md:p-3 bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-400 hover:text-indigo-300 rounded-xl transition-all border border-indigo-500/20 active:scale-95"
-                                title="Quản trị Backend"
-                            >
-                                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 md:h-6 md:w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                                </svg>
-                            </button>
-                        )}
-
-                        <div className="flex items-center gap-2">
-                            <div className="flex flex-col items-end">
-                                <span className="text-white font-bold text-[10px] md:text-sm leading-none mb-1 max-w-[70px] md:max-w-none truncate">{user.name || user.email.split('@')[0]}</span>
-                                <div className="flex gap-2">
-                                    <button
-                                        onClick={() => setShowPasswordModal(true)}
-                                        className="text-[9px] text-blue-400 font-black uppercase tracking-widest hover:text-blue-300 transition-colors"
-                                    >
-                                        Mật khẩu
-                                    </button>
-                                    <button
-                                        onClick={handleLogout}
-                                        className="text-[9px] text-red-400 font-black uppercase tracking-widest hover:text-red-300 transition-colors"
-                                    >
-                                        Thoát
-                                    </button>
-                                </div>
-                            </div>
-                            {user.avatarUrl && !avatarError ? (
-                                <img
-                                    src={user.avatarUrl}
-                                    className="w-8 h-8 md:w-10 md:h-10 rounded-full border border-emerald-500/30 shadow-lg object-cover"
-                                    alt="Avatar"
-                                    referrerPolicy="no-referrer"
-                                    onError={() => setAvatarError(true)}
-                                />
-                            ) : (
-                                <div className="w-8 h-8 md:w-10 md:h-10 rounded-full bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400 text-[10px] font-bold">
-                                    {(user.name || user.email)[0].toUpperCase()}
-                                </div>
-                            )}
-                        </div>
+                        <button
+                            onClick={onLogout}
+                            className="p-2 md:p-3 bg-red-500/10 hover:bg-red-500/20 text-red-500 hover:text-red-400 rounded-xl transition-all border border-red-500/20 active:scale-95 ml-2"
+                            title="Đăng xuất"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 md:h-6 md:w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 17l5-5m0 0l-5-5m5 5H9m5 4v1a3 3 0 01-3 3H5a3 3 0 01-3-3V6a3 3 0 013-3h6a3 3 0 013 3v1" />
+                            </svg>
+                        </button>
 
                         <label className="group relative cursor-pointer ml-1">
                             <input type="file" accept=".epub" onChange={handleFileUpload} disabled={uploading} className="hidden" />
@@ -263,106 +211,15 @@ function MainApp({
                     </div>
                 )}
 
-                {/* Continue Reading Carousel - Cinematic Horizontal Scroll */}
-                {heroBooks.length > 0 && (
-                    <div className="mb-4">
-                        <div className="flex items-center justify-between mb-4 px-1">
-                            <h3 className="text-xs font-black text-emerald-500 uppercase tracking-[0.3em]">
-                                {heroBooks.some(b => (b.progress || 0) > 0) ? 'Tiếp tục nghe' : 'Sách mới nhất'}
-                            </h3>
-                            {heroBooks.length > 1 && (
-                                <div className="flex gap-1.5 bg-slate-800/50 px-2 py-1 rounded-full border border-white/5 backdrop-blur-sm">
-                                    {heroBooks.map((_, idx) => (
-                                        <div
-                                            key={idx}
-                                            className={`h-1.5 transition-all duration-300 rounded-full ${idx === activeHeroIndex ? 'w-4 bg-emerald-500' : 'w-1.5 bg-slate-600'}`}
-                                        />
-                                    ))}
-                                </div>
-                            )}
-                        </div>
-
-                        <div
-                            onScroll={(e) => {
-                                const container = e.currentTarget;
-                                const itemWidth = container.firstElementChild?.clientWidth || 0;
-                                const gap = 16; // gap-4 = 1rem = 16px
-                                const index = Math.round(container.scrollLeft / (itemWidth + gap));
-                                if (index !== activeHeroIndex && index < heroBooks.length) setActiveHeroIndex(index);
-                            }}
-                            className="flex gap-4 overflow-x-auto pb-4 scrollbar-hide snap-x snap-mandatory -mx-4 px-4"
-                        >
-                            {heroBooks.map((heroBook) => (
-                                <div
-                                    key={heroBook.id}
-                                    onClick={() => setSelectedBookId(heroBook.id)}
-                                    className="relative flex-shrink-0 w-[92vw] md:w-[750px] group cursor-pointer overflow-hidden rounded-[32px] border border-white/10 shadow-2xl active:scale-[0.98] transition-all duration-300 snap-center"
-                                >
-                                    {/* Cinematic Background */}
-                                    <div className="absolute inset-0 z-0">
-                                        <img
-                                            src={heroBook.cover ? URL.createObjectURL(heroBook.cover) : (heroBook.coverImageUrl ? `${API_BASE_URL}${heroBook.coverImageUrl}` : '/default-cover.png')}
-                                            alt=""
-                                            className="w-full h-full object-cover blur-[80px] opacity-40 scale-150"
-                                        />
-                                        <div className="absolute inset-0 bg-gradient-to-b from-slate-900/40 via-slate-900/60 to-slate-900" />
-                                    </div>
-
-                                    <div className="relative z-10 flex flex-col p-5 md:p-8">
-                                        <div className="flex flex-row items-start gap-6 w-full text-left">
-                                            <div className="w-44 md:w-64 aspect-[2/3] flex-shrink-0 relative">
-                                                <img
-                                                    src={heroBook.cover ? URL.createObjectURL(heroBook.cover) : (heroBook.coverImageUrl ? `${API_BASE_URL}${heroBook.coverImageUrl}` : '/default-cover.png')}
-                                                    className="h-full w-full object-cover rounded-xl shadow-2xl border border-white/10"
-                                                    alt={heroBook.title}
-                                                />
-                                                {!heroBook.cover && !heroBook.coverImageUrl && (
-                                                    <div className="absolute inset-0 flex flex-col items-center justify-center p-4 text-center pointer-events-none rounded-xl overflow-hidden">
-                                                        <div className="absolute inset-0 bg-black/40" />
-                                                        <h3 className="text-white font-playfair font-black text-2xl leading-tight line-clamp-3 mb-2 drop-shadow-md z-10 uppercase tracking-wide">{heroBook.title}</h3>
-                                                        <p className="text-white/80 font-serif text-sm line-clamp-2 drop-shadow-md z-10">{heroBook.author || 'Khuyết danh'}</p>
-                                                    </div>
-                                                )}
-                                            </div>
-                                            <div className="flex-1 min-w-0 flex flex-col justify-between self-stretch py-1">
-                                                <div>
-                                                    <h2 className="text-2xl md:text-5xl font-black text-white mb-2 font-playfair tracking-tight leading-tight line-clamp-2">
-                                                        {heroBook.title}
-                                                    </h2>
-                                                    <p className="text-emerald-400/60 text-sm md:text-xl font-medium truncate italic mb-4">
-                                                        {heroBook.author || 'Tác giả ẩn danh'}
-                                                    </p>
-
-                                                    {heroBook.currentText && (
-                                                        <p className="text-slate-200 text-sm md:text-lg italic line-clamp-3 md:line-clamp-4 font-serif leading-relaxed border-l-4 border-emerald-500/30 pl-4 mb-6">
-                                                            "{heroBook.currentText}..."
-                                                        </p>
-                                                    )}
-                                                </div>
-
-                                                <div className="w-full">
-                                                    <div className="mb-2 px-1 text-right">
-                                                        <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px] md:text-xs">BẠN ĐÃ HOÀN THÀNH </span>
-                                                        <span className="text-emerald-400 font-black text-xs md:text-sm">{heroBook.progress || 0}%</span>
-                                                    </div>
-                                                    <div className="h-2 w-full bg-black/40 rounded-full overflow-hidden border border-white/5 p-0.5">
-                                                        <div
-                                                            className="h-full bg-gradient-to-r from-emerald-500 to-teal-400 rounded-full transition-all duration-700"
-                                                            style={{ width: `${heroBook.progress || 0}%` }}
-                                                        />
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                )}
+                {/* Continue Reading Carousel */}
+                <HeroCarousel 
+                    heroBooks={heroBooks} 
+                    activeHeroIndex={activeHeroIndex} 
+                    setActiveHeroIndex={setActiveHeroIndex} 
+                    setSelectedBookId={setSelectedBookId} 
+                />
 
                 <main className="pb-12">
-                    {/* Search & Sort Controls */}
                     <div className="flex flex-col gap-4 mb-8">
                         <div className="relative group">
                             <input
@@ -419,9 +276,15 @@ function MainApp({
 
                     {filteredAndSortedBooks.length === 0 ? (
                         <div className="text-center py-20 bg-slate-800/20 rounded-3xl border border-slate-700/50 border-dashed">
-                            <div className="text-5xl mb-4 opacity-20">🔍</div>
-                            <p className="text-slate-400 text-lg font-medium">Không tìm thấy sách nào</p>
-                            <button onClick={() => setSearchQuery('')} className="mt-4 text-emerald-400 font-bold text-sm underline">Xóa tìm kiếm</button>
+                            <div className="text-5xl mb-4 opacity-20">📚</div>
+                            <p className="text-slate-400 text-lg font-medium">
+                                {searchQuery ? 'Không tìm thấy sách nào' : 'Chưa có sách nào'}
+                            </p>
+                            {searchQuery ? (
+                                <button onClick={() => setSearchQuery('')} className="mt-4 text-emerald-400 font-bold text-sm underline">Xóa tìm kiếm</button>
+                            ) : (
+                                <p className="mt-2 text-slate-500 text-sm">Nhấn 📤 để tải lên file EPUB</p>
+                            )}
                         </div>
                     ) : viewMode === 'author' ? (
                         <div className="space-y-10">
@@ -471,173 +334,69 @@ function MainApp({
                 </div>
             )}
 
-            {showDashboard && user && (
-                <Dashboard books={books} user={user} onClose={() => setShowDashboard(false)} />
+            {showDashboard && (
+                <Dashboard books={books} user={{ id: 1, email: 'local', name: 'Trạm Đọc', role: 'USER' }} onClose={() => setShowDashboard(false)} />
             )}
 
             <InfoModal isOpen={showInfo} onClose={() => setShowInfo(false)} />
-            <PasswordModal
-                isOpen={showPasswordModal}
-                onClose={() => setShowPasswordModal(false)}
-                authAxios={authAxios}
-            />
         </div>
     );
 }
 
-function BookCard({ book, onSelect, onDelete }: { book: Book, onSelect: (id: number) => void, onDelete: (confirm: { bookId: number, title: string }) => void }) {
-    const isNew = !book.lastRead;
-    const isCompleted = (book.progress || 0) === 100;
-    const inProgress = (book.progress || 0) > 0 && (book.progress || 0) < 100;
 
-    return (
-        <div
-            className="group relative flex flex-col bg-slate-900/40 rounded-2xl overflow-hidden border border-white/5 transition-all duration-500 cursor-pointer h-full hover:shadow-2xl hover:shadow-emerald-500/10 hover:border-white/10"
-            onClick={() => onSelect(book.id)}
-        >
-            {/* Cover Image Container */}
-            <div className="aspect-[2/3] w-full bg-slate-950 relative overflow-hidden">
-                <img
-                    src={book.cover ? URL.createObjectURL(book.cover) : (book.coverImageUrl ? `${API_BASE_URL}${book.coverImageUrl}` : '/default-cover.png')}
-                    alt={book.title}
-                    className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105 group-hover:blur-[2px] group-hover:brightness-50"
-                />
-                {!book.cover && !book.coverImageUrl && (
-                    <div className="absolute inset-0 flex flex-col items-center justify-center p-4 text-center z-10 pointer-events-none">
-                        <div className="absolute inset-0 bg-black/40" />
-                        <h3 className="text-white font-playfair font-black text-xl leading-tight line-clamp-3 mb-2 drop-shadow-md z-10 uppercase tracking-wide">{book.title}</h3>
-                        <p className="text-white/80 font-serif text-sm line-clamp-2 drop-shadow-md z-10">{book.author || 'Khuyết danh'}</p>
-                    </div>
-                )}
-
-                {/* Cinematic Gradient Overlay */}
-                <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/80 via-black/40 to-transparent opacity-60 transition-opacity duration-300 group-hover:opacity-90" />
-
-                {/* Smart Badges */}
-                <div className="absolute top-2 left-2 flex flex-col gap-1.5 z-20">
-                    {isNew && (
-                        <span className="bg-amber-500/90 backdrop-blur-md text-[9px] font-black uppercase tracking-widest text-white px-2 py-1 rounded shadow-lg border border-white/10">
-                            MỚI
-                        </span>
-                    )}
-                    {isCompleted && (
-                        <span className="bg-emerald-500/90 backdrop-blur-md text-[9px] font-black uppercase tracking-widest text-white px-2 py-1 rounded shadow-lg border border-white/10 flex items-center gap-1">
-                            <span>✓</span> ĐÃ XONG
-                        </span>
-                    )}
-                    {inProgress && (
-                        <span className="bg-indigo-500/90 backdrop-blur-md text-[9px] font-black uppercase tracking-widest text-white px-2 py-1 rounded shadow-lg border border-white/10">
-                            {book.progress}%
-                        </span>
-                    )}
-                </div>
-
-                {/* Quick Peek Overlay (Hover) */}
-                <div className="absolute inset-0 flex flex-col items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-300 z-10 px-4 text-center">
-                    <div className="bg-emerald-500 text-white w-12 h-12 rounded-full flex items-center justify-center shadow-lg shadow-emerald-500/40 mb-3 transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300">
-                        <svg className="w-5 h-5 fill-current ml-0.5" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
-                    </div>
-                    {book.currentText && (
-                        <p className="text-white/90 text-xs italic font-serif line-clamp-3 leading-relaxed drop-shadow-md transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300 delay-75">
-                            "{book.currentText}"
-                        </p>
-                    )}
-                </div>
-
-                {/* Delete Button (Hover) */}
-                <button
-                    onClick={(e) => { e.stopPropagation(); onDelete({ bookId: book.id, title: book.title }); }}
-                    className="absolute top-2 right-2 p-2 bg-black/40 hover:bg-red-500/80 text-white/60 hover:text-white rounded-full transition-all backdrop-blur-md z-30 opacity-0 group-hover:opacity-100 translate-x-2 group-hover:translate-x-0 duration-200"
-                    title="Xóa sách"
-                >
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                    </svg>
-                </button>
-
-                {/* Progress Bar (Bottom) */}
-                {inProgress && (
-                    <div className="absolute bottom-0 left-0 right-0 h-1 bg-white/10">
-                        <div className="h-full bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.5)]" style={{ width: `${book.progress}%` }} />
-                    </div>
-                )}
-            </div>
-
-            {/* Content info */}
-            <div className="p-3 flex-1 flex flex-col justify-start bg-gradient-to-b from-transparent to-slate-900/30">
-                <h3 className="text-white font-playfair font-bold leading-tight mb-1 truncate group-hover:text-emerald-400 transition-colors uppercase tracking-tight">
-                    {book.title}
-                </h3>
-                <p className="text-slate-500 text-xs truncate font-medium">
-                    {book.author || 'Tác giả ẩn danh'}
-                </p>
-            </div>
-        </div>
-    );
-}
 
 function App() {
-    const [user, setUser] = useState<User | null>(null);
+    const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
     const [books, setBooks] = useState<Book[]>([]);
     const [loading, setLoading] = useState(true);
 
-    const token = localStorage.getItem('audiobook_token');
-    const authAxios = axios.create({
-        baseURL: API_BASE_URL,
-        headers: { Authorization: `Bearer ${token}` }
-    });
-
     const loadBooks = async () => {
+        if (!token) return;
         try {
-            const res = await authAxios.get('/api/books');
-            setBooks(res.data);
+            const serverBooks = await getAllBooks();
+            setBooks(serverBooks);
         } catch (error) {
-            const offBooks = await getAllOfflineBooks();
-            if (offBooks) setBooks(offBooks as any[]);
+            console.error('Failed to load books:', error);
         }
     };
 
     useEffect(() => {
-        const checkAuth = async () => {
-            if (!token) {
-                setLoading(false);
-                return;
-            }
-            try {
-                const res = await authAxios.get('/api/auth/me');
-                setUser(res.data);
-                const booksRes = await authAxios.get('/api/books');
-                setBooks(booksRes.data);
-            } catch (e: any) {
-                if (e.response && (e.response.status === 401 || e.response.status === 403)) {
-                    localStorage.removeItem('audiobook_token');
-                    setUser(null);
-                } else {
-                    const offBooks = await getAllOfflineBooks();
-                    if (offBooks) setBooks(offBooks as any[]);
-                }
-            } finally {
-                setLoading(false);
-            }
+        const init = async () => {
+            await loadBooks();
+            setLoading(false);
         };
-        checkAuth();
+        if (token) {
+            init();
+        } else {
+            setLoading(false);
+        }
     }, [token]);
+
+    const handleLogin = (newToken: string, user: any) => {
+        localStorage.setItem('token', newToken);
+        localStorage.setItem('user', JSON.stringify(user));
+        setToken(newToken);
+    };
+
+    if (!token) {
+        return <Auth onLogin={handleLogin} />;
+    }
 
     return (
         <BrowserRouter>
             <Routes>
                 <Route path="/" element={
                     <MainApp
-                        user={user!}
-                        setUser={setUser}
                         books={books}
                         loadBooks={loadBooks}
-                        authAxios={authAxios}
                         loading={loading}
+                        onLogout={() => {
+                            localStorage.removeItem('token');
+                            localStorage.removeItem('user');
+                            setToken(null);
+                        }}
                     />
                 } />
-                <Route path="/admin" element={user?.role === 'ADMIN' ? <AdminDashboard /> : <Navigate to="/" />} />
-                <Route path="/auth-success" element={<AuthSuccess />} />
                 <Route path="*" element={<Navigate to="/" />} />
             </Routes>
         </BrowserRouter>

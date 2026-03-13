@@ -1,7 +1,7 @@
 import { } from 'react';
 import { Chart as ChartJS, ArcElement, Tooltip, Legend } from 'chart.js';
 import { Doughnut } from 'react-chartjs-2';
-import { API_BASE_URL } from '../constants';
+
 
 ChartJS.register(ArcElement, Tooltip, Legend);
 
@@ -166,7 +166,7 @@ export default function Dashboard({ books, user, onClose }: DashboardProps) {
                                 {inProgressBooks > 0 ? books.filter(b => (b.progress || 0) > 0 && (b.progress || 0) < 100).slice(0, 3).map(book => (
                                     <div key={book.id} className="flex items-center gap-4 p-3 bg-white/5 rounded-xl border border-white/5 hover:bg-white/10 transition-colors">
                                         <div className="w-12 h-16 bg-slate-700 rounded-lg flex-shrink-0 overflow-hidden relative">
-                                            <img src={book.coverImageUrl ? `${API_BASE_URL}${book.coverImageUrl}` : '/default-cover.png'} className="w-full h-full object-cover" alt="" />
+                                            <img src={book.coverImageUrl || '/default-cover.png'} className="w-full h-full object-cover" alt="" />
                                             {!book.coverImageUrl && (
                                                 <div className="absolute inset-0 flex flex-col items-center justify-center p-1 text-center pointer-events-none">
                                                     <div className="absolute inset-0 bg-black/40" />

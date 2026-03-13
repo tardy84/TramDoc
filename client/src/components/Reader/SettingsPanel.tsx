@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { ThemeMode } from './types';
+import { getApiKeys, setApiKeys } from '../../services/ttsService';
 
 interface SettingsPanelProps {
     showSettings: boolean;
@@ -30,15 +31,23 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
     selectedVoice,
     setSelectedVoice
 }) => {
+    const [showApiKeys, setShowApiKeys] = useState(false);
+    const [keys, setKeys] = useState(getApiKeys);
+
     if (!showSettings) return null;
 
+    const saveKeys = () => {
+        setApiKeys(keys);
+        setShowApiKeys(false);
+    };
+
     return (
-        <div className="fixed top-24 right-4 w-80 bg-black/60 backdrop-blur-3xl border border-white/10 rounded-[32px] shadow-2xl overflow-hidden z-50 animate-in fade-in zoom-in-95 duration-200 text-white">
-            <div className="p-4 bg-white/10 border-b border-white/20 flex justify-between items-center">
+        <div className="fixed top-24 right-4 w-80 max-h-[70vh] bg-black/60 backdrop-blur-3xl border border-white/10 rounded-[32px] shadow-2xl overflow-hidden z-50 animate-in fade-in zoom-in-95 duration-200 text-white flex flex-col">
+            <div className="p-4 bg-white/10 border-b border-white/20 flex justify-between items-center flex-shrink-0">
                 <h3 className="text-xl font-bold">⚙️ Cài đặt</h3>
                 <button onClick={() => setShowSettings(false)} className="text-gray-400 hover:text-white transition-colors">✕</button>
             </div>
-            <div className="p-6 space-y-8">
+            <div className="p-6 space-y-8 overflow-y-auto">
                 {/* Theme */}
                 <div>
                     <label className="text-xs font-bold text-gray-400 uppercase tracking-widest block mb-4">Giao diện</label>
@@ -88,22 +97,81 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
                     <label className="text-xs font-bold text-gray-400 uppercase tracking-widest block mb-4">Giọng đọc</label>
                     <div className="grid grid-cols-2 gap-2">
                         {[
-                            { id: 'vi-VN-Wavenet-B', label: 'Anh Quân (Nam)' },
-                            { id: 'vi-VN-Wavenet-D', label: 'Minh Quang (Nam)' },
-                            { id: 'vi-VN-Wavenet-A', label: 'Mai Chi (Nữ)' },
-                            { id: 'vi-VN-Wavenet-C', label: 'Thùy Chi (Nữ)' },
-                            { id: 'vi-VN-Neural2-D', label: 'Hoàng Long (Nam)' },
-                            { id: 'vi-VN-Neural2-A', label: 'Hà Phương (Nữ)' }
+                            { id: 'vi-VN-Wavenet-B', name: 'Anh Quân', icon: '🧔‍♂️' },
+                            { id: 'vi-VN-Wavenet-D', name: 'Minh Quang', icon: '🧔‍♂️' },
+                            { id: 'vi-VN-Wavenet-A', name: 'Mai Chi', icon: '👩‍🦰' },
+                            { id: 'vi-VN-Wavenet-C', name: 'Thùy Chi', icon: '👩‍🦰' },
+                            { id: 'azure-vi-VN-HoaiMyNeural', name: 'Hoài My', icon: '👩‍🦰', premium: true },
+                            { id: 'azure-vi-VN-NamMinhNeural', name: 'Nam Minh', icon: '🧔‍♂️', premium: true }
                         ].map(v => (
                             <button
                                 key={v.id}
                                 onClick={() => setSelectedVoice(v.id)}
-                                className={`p-2 rounded-lg border text-[10px] font-bold transition-all ${selectedVoice === v.id ? 'bg-blue-500/20 border-blue-500 text-blue-400' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}
+                                className={`p-2 rounded-lg border text-[10px] font-bold transition-all flex items-center justify-between gap-2 ${selectedVoice === v.id ? 'bg-blue-500/20 border-blue-500 text-blue-400' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}
                             >
-                                {v.label}
+                                <span className="flex flex-col items-start leading-tight">
+                                    <span>{v.name}</span>
+                                    {v.premium && <span className="text-[8px] opacity-60">Azure ✨</span>}
+                                </span>
+                                <span className="text-lg">{v.icon}</span>
                             </button>
                         ))}
                     </div>
+                </div>
+
+                {/* API Keys */}
+                <div>
+                    <button
+                        onClick={() => { setShowApiKeys(!showApiKeys); setKeys(getApiKeys()); }}
+                        className="flex items-center justify-between w-full text-xs font-bold text-gray-400 uppercase tracking-widest mb-4"
+                    >
+                        <span>🔑 API Keys</span>
+                        <span className={`text-[10px] transition-transform ${showApiKeys ? 'rotate-180' : ''}`}>▼</span>
+                    </button>
+
+                    {showApiKeys && (
+                        <div className="space-y-3 animate-in fade-in slide-in-from-top-2 duration-200">
+                            <div>
+                                <label className="text-[10px] text-gray-500 mb-1 block">Google Cloud API Key</label>
+                                <input
+                                    type="password"
+                                    value={keys.googleKey}
+                                    onChange={e => setKeys({ ...keys, googleKey: e.target.value })}
+                                    placeholder="AIza..."
+                                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-white placeholder:text-gray-600 focus:outline-none focus:border-blue-500/50"
+                                />
+                            </div>
+                            <div>
+                                <label className="text-[10px] text-gray-500 mb-1 block">Azure Speech Key</label>
+                                <input
+                                    type="password"
+                                    value={keys.azureKey}
+                                    onChange={e => setKeys({ ...keys, azureKey: e.target.value })}
+                                    placeholder="abc123..."
+                                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-white placeholder:text-gray-600 focus:outline-none focus:border-blue-500/50"
+                                />
+                            </div>
+                            <div>
+                                <label className="text-[10px] text-gray-500 mb-1 block">Azure Region</label>
+                                <input
+                                    type="text"
+                                    value={keys.azureRegion}
+                                    onChange={e => setKeys({ ...keys, azureRegion: e.target.value })}
+                                    placeholder="southeastasia"
+                                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-white placeholder:text-gray-600 focus:outline-none focus:border-blue-500/50"
+                                />
+                            </div>
+                            <button
+                                onClick={saveKeys}
+                                className="w-full py-2 bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 rounded-lg text-xs font-bold hover:bg-emerald-500/30 transition-all"
+                            >
+                                💾 Lưu API Keys
+                            </button>
+                            <p className="text-[9px] text-gray-600 text-center">
+                                Keys được lưu trên thiết bị của bạn
+                            </p>
+                        </div>
+                    )}
                 </div>
 
                 {/* Sleep Timer */}

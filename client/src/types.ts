@@ -28,13 +28,11 @@ export interface Book {
     id: number;
     title: string;
     author: string;
-    coverImageUrl?: string;
-    cover?: Blob; // Offline cover blob
-    createdAt: string;
-    chapters: Chapter[];
+    coverImageUrl?: string; // Changed from Blob to string URI mapping directly to /covers/
     progress?: number;
-    currentText?: string;
     lastRead?: number;
+    chapters: Chapter[];
+    currentText?: string;
 }
 
 export interface Bookmark {
@@ -43,9 +41,10 @@ export interface Bookmark {
     chapterId: number;
     segmentId: number;
     previewText: string;
-    note?: string;
-    createdAt: string;
-    chapter: {
+    note?: string; // Optional user note
+    createdAt: string; // ISO date string from Server
+    // Joined relational data
+    chapter?: {
         title: string;
         orderIndex: number;
     };
