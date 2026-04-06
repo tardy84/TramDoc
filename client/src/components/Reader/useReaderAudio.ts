@@ -260,6 +260,8 @@ export const useReaderAudio = ({
 
         window.speechSynthesis.cancel();
         queuedIndicesRef.current.clear();
+        preloadAudioRef.current = null;
+        nextAudioIndexRef.current = null;
 
         const currentGlobal = getGlobalAudio();
         if (currentGlobal) {
@@ -377,6 +379,8 @@ export const useReaderAudio = ({
             }
             activeUrlMapRef.current.clear();
             setAudioFiles([]);
+            preloadAudioRef.current = null;
+            nextAudioIndexRef.current = null;
             if (isPlaying) {
                 generateAudio(currentSegmentIndex);
                 return;

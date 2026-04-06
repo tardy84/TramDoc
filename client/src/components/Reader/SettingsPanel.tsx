@@ -98,11 +98,13 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
                     <div className="grid grid-cols-2 gap-2">
                         {[
                             { id: 'vi-VN-Wavenet-B', name: 'Anh Quân', icon: '🧔‍♂️' },
-                            { id: 'vi-VN-Wavenet-D', name: 'Minh Quang', icon: '🧔‍♂️' },
                             { id: 'vi-VN-Wavenet-A', name: 'Mai Chi', icon: '👩‍🦰' },
-                            { id: 'vi-VN-Wavenet-C', name: 'Thùy Chi', icon: '👩‍🦰' },
+                            { id: 'gemini-Puck', name: 'Gemini Nam', icon: '🤖', premium: true },
+                            { id: 'gemini-Aoede', name: 'Gemini Nữ', icon: '🤖', premium: true },
                             { id: 'azure-vi-VN-HoaiMyNeural', name: 'Hoài My', icon: '👩‍🦰', premium: true },
-                            { id: 'azure-vi-VN-NamMinhNeural', name: 'Nam Minh', icon: '🧔‍♂️', premium: true }
+                            { id: 'azure-vi-VN-NamMinhNeural', name: 'Nam Minh', icon: '🧔‍♂️', premium: true },
+                            { id: 'minimax-male-qn-qingse', name: 'Thanh Phong', icon: '🧔‍♂️', premium: true },
+                            { id: 'minimax-female-shaonv', name: 'Hà My', icon: '👩‍🦰', premium: true }
                         ].map(v => (
                             <button
                                 key={v.id}
@@ -111,7 +113,10 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
                             >
                                 <span className="flex flex-col items-start leading-tight">
                                     <span>{v.name}</span>
-                                    {v.premium && <span className="text-[8px] opacity-60">Azure ✨</span>}
+                                    {v.premium && <span className="text-[8px] opacity-60">
+                                        {v.id.includes('azure') ? 'Azure ✨' : 
+                                         v.id.includes('minimax') ? 'MiniMax ✨' : 'Gemini ✨'}
+                                    </span>}
                                 </span>
                                 <span className="text-lg">{v.icon}</span>
                             </button>
@@ -158,6 +163,26 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
                                     value={keys.azureRegion}
                                     onChange={e => setKeys({ ...keys, azureRegion: e.target.value })}
                                     placeholder="southeastasia"
+                                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-white placeholder:text-gray-600 focus:outline-none focus:border-blue-500/50"
+                                />
+                            </div>
+                            <div>
+                                <label className="text-[10px] text-gray-500 mb-1 block">MiniMax API Key</label>
+                                <input
+                                    type="password"
+                                    value={keys.minimaxKey || ''}
+                                    onChange={e => setKeys({ ...keys, minimaxKey: e.target.value })}
+                                    placeholder="sk-cp-..."
+                                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-white placeholder:text-gray-600 focus:outline-none focus:border-blue-500/50"
+                                />
+                            </div>
+                            <div>
+                                <label className="text-[10px] text-gray-500 mb-1 block">Gemini API Key</label>
+                                <input
+                                    type="password"
+                                    value={keys.geminiKey || ''}
+                                    onChange={e => setKeys({ ...keys, geminiKey: e.target.value })}
+                                    placeholder="AIza..."
                                     className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-white placeholder:text-gray-600 focus:outline-none focus:border-blue-500/50"
                                 />
                             </div>

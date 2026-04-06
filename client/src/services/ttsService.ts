@@ -11,17 +11,23 @@ export function getApiKeys() {
         azureKey: import.meta.env.VITE_AZURE_SPEECH_KEY || localStorage.getItem('tts_azure_key') || '',
         azureRegion: import.meta.env.VITE_AZURE_SPEECH_REGION || localStorage.getItem('tts_azure_region') || 'southeastasia',
         googleKey: import.meta.env.VITE_GOOGLE_CLOUD_API_KEY || localStorage.getItem('tts_google_key') || '',
+        minimaxKey: import.meta.env.VITE_MINIMAX_API_KEY || localStorage.getItem('tts_minimax_key') || '',
+        geminiKey: import.meta.env.VITE_GEMINI_API_KEY || localStorage.getItem('tts_gemini_key') || '',
     };
 }
 
-export function setApiKeys(keys: { azureKey?: string; azureRegion?: string; googleKey?: string }) {
+export function setApiKeys(keys: { azureKey?: string; azureRegion?: string; googleKey?: string; minimaxKey?: string; geminiKey?: string }) {
     if (keys.azureKey !== undefined) localStorage.setItem('tts_azure_key', keys.azureKey);
     if (keys.azureRegion !== undefined) localStorage.setItem('tts_azure_region', keys.azureRegion);
     if (keys.googleKey !== undefined) localStorage.setItem('tts_google_key', keys.googleKey);
+    if (keys.minimaxKey !== undefined) localStorage.setItem('tts_minimax_key', keys.minimaxKey);
+    if (keys.geminiKey !== undefined) localStorage.setItem('tts_gemini_key', keys.geminiKey);
 }
 
 export function hasApiKeys(voice: string): boolean {
     const keys = getApiKeys();
+    if (voice.startsWith('gemini-')) return !!(keys.geminiKey || keys.googleKey);
+    if (voice.startsWith('minimax-')) return !!keys.minimaxKey;
     if (voice.startsWith('azure-')) return !!(keys.azureKey && keys.azureRegion);
     return !!keys.googleKey; // Google voices
 }
@@ -43,6 +49,12 @@ export async function synthesize(text: string, voice: string, signal?: AbortSign
     if (!text || typeof text !== 'string') {
         // Return a tiny silent MP3 for empty/undefined segments
         return new Blob([], { type: 'audio/mpeg' });
+    }
+    if (voice.startsWith('gemini-')) {
+        return synthesizeGemini(text, voice, signal);
+    }
+    if (voice.startsWith('minimax-')) {
+        return synthesizeMinimax(text, voice, signal);
     }
     if (voice.startsWith('azure-')) {
         return synthesizeAzure(text, voice, signal);
@@ -90,38 +102,43 @@ async function synthesizeGoogle(text: string, voice: string, signal?: AbortSigna
     const voiceConfig = googleVoiceMap[voice] || googleVoiceMap['vi-VN-Wavenet-B'];
     const url = `https://texttospeech.googleapis.com/v1/text:synthesize?key=${googleKey}`;
 
-    const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            input: { text },
-            voice: {
-                languageCode: voiceConfig.languageCode,
-                name: voiceConfig.name,
-                ssmlGender: voiceConfig.ssmlGender,
-            },
-            audioConfig: {
-                audioEncoding: 'MP3',
-                speakingRate: voiceConfig.speakingRate,
-                pitch: voiceConfig.pitch,
-            },
-        }),
-        signal
-    });
+    try {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                input: { text },
+                voice: {
+                    languageCode: voiceConfig.languageCode,
+                    name: voiceConfig.name,
+                    ssmlGender: voiceConfig.ssmlGender,
+                },
+                audioConfig: {
+                    audioEncoding: 'MP3',
+                    speakingRate: voiceConfig.speakingRate,
+                    pitch: voiceConfig.pitch,
+                },
+            }),
+            signal
+        });
 
-    if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(`Google TTS lỗi: ${(errorData as any)?.error?.message || response.statusText}`);
-    }
+        if (!response.ok) {
+            throw new Error(`Google TTS lỗi HTTP`);
+        }
 
-    const data = await response.json();
-    // Google returns base64 encoded audio
-    const binaryString = atob(data.audioContent);
-    const bytes = new Uint8Array(binaryString.length);
-    for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
+        const data = await response.json();
+        const binaryString = atob(data.audioContent);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+        }
+        return new Blob([bytes], { type: 'audio/mpeg' });
+    } catch (e) {
+        console.warn(`[GoogleTTS Client] Lỗi API, tự động chuyển qua MiniMax.`, e);
+        // Fallback to Minimax
+        const minimaxVoice = voiceConfig.ssmlGender === 'FEMALE' ? 'minimax-female-shaonv' : 'minimax-male-qn-qingse';
+        return synthesizeMinimax(text, minimaxVoice, signal);
     }
-    return new Blob([bytes], { type: 'audio/mpeg' });
 }
 
 function escapeXml(text: string): string {
@@ -133,3 +150,112 @@ function escapeXml(text: string): string {
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&apos;');
 }
+
+async function synthesizeMinimax(text: string, voice: string, signal?: AbortSignal): Promise<Blob> {
+    const { minimaxKey } = getApiKeys();
+    if (!minimaxKey) throw new Error('Chưa cấu hình MiniMax API key');
+
+    const voiceId = voice.replace('minimax-', '');
+    const url = 'https://api.minimax.io/v1/t2a_v2';
+
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${minimaxKey}`,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            model: 'speech-2.8-hd',
+            text: text,
+            stream: false,
+            voice_setting: {
+                voice_id: voiceId,
+                speed: 1.0,
+                vol: 1.0,
+                pitch: 0
+            },
+            audio_setting: {
+                sample_rate: 32000,
+                bitrate: 128000,
+                format: 'mp3',
+                channel: 1
+            }
+        }),
+        signal
+    });
+
+    if (!response.ok) {
+        throw new Error(`MiniMax TTS lỗi HTTP: ${response.status}`);
+    }
+
+    const data = await response.json();
+    if (data.base_resp && data.base_resp.status_code !== 0) {
+        throw new Error(`MiniMax TTS lỗi API: ${data.base_resp.status_msg}`);
+    }
+
+    const hexString = data.data.audio;
+    if (!hexString) {
+        throw new Error('Không có audio data từ MiniMax');
+    }
+
+    const bytes = new Uint8Array(hexString.length / 2);
+    for (let i = 0; i < bytes.length; i++) {
+        bytes[i] = parseInt(hexString.substr(i * 2, 2), 16);
+    }
+    return new Blob([bytes], { type: 'audio/mpeg' });
+}
+
+async function synthesizeGemini(text: string, voice: string, signal?: AbortSignal): Promise<Blob> {
+    const { geminiKey, googleKey } = getApiKeys();
+    const apiKey = geminiKey || googleKey;
+    if (!apiKey) throw new Error('Chưa cấu hình Gemini/Google API key');
+
+    const voiceName = voice.replace('gemini-', '');
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-native-audio-latest:generateContent?key=${apiKey}`;
+
+    try {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                contents: [{ parts: [{ text }] }],
+                generationConfig: {
+                    responseModalities: ["AUDIO"],
+                    speechConfig: {
+                        voiceConfig: {
+                            prebuiltVoiceConfig: {
+                                voiceName: voiceName
+                            }
+                        }
+                    }
+                }
+            }),
+            signal
+        });
+
+        if (!response.ok) {
+            throw new Error(`Gemini TTS lỗi HTTP`);
+        }
+
+        const data = await response.json();
+        const parts = data.candidates[0].content.parts;
+        for (const p of parts) {
+            if (p.inlineData && p.inlineData.mimeType.startsWith('audio/')) {
+                const binaryString = atob(p.inlineData.data);
+                const bytes = new Uint8Array(binaryString.length);
+                for (let i = 0; i < binaryString.length; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+                return new Blob([bytes], { type: 'audio/wav' }); 
+            }
+        }
+        throw new Error('Gemini TTS: Không có dữ liệu audio');
+    } catch (e) {
+        console.warn(`[GeminiTTS Client] Lỗi API, tự động chuyển qua MiniMax.`, e);
+        const minimaxVoice = voiceName === 'Aoede' ? 'minimax-female-shaonv' : 'minimax-male-qn-qingse';
+        return synthesizeMinimax(text, minimaxVoice, signal);
+    }
+}
+

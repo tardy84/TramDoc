@@ -5,11 +5,15 @@ import fs from 'fs/promises';
 import { authenticateJWT, AuthRequest } from '../middleware/auth.js';
 import { GoogleTTSService } from '../services/googleTTS.js';
 import { AzureTTSService } from '../services/azureTTS.js';
+import { MiniMaxTTSService } from '../services/minimaxTTS.js';
+import { GeminiTTSService } from '../services/geminiTTS.js';
 
 const router = Router();
 const prisma = new PrismaClient();
 const googleTTS = new GoogleTTSService();
 const azureTTS = new AzureTTSService();
+const minimaxTTS = new MiniMaxTTSService();
+const geminiTTS = new GeminiTTSService();
 
 // Helper for generating a specific segment (Deduped + Safe)
 const generatingFiles = new Set<string>();
@@ -62,7 +66,7 @@ async function generateSegment(bookId: number, chapterId: number, segmentIndex: 
             return false;
         }
 
-        const ttsService = voice.startsWith('azure-') ? azureTTS : googleTTS;
+        const ttsService = voice.startsWith('minimax-') ? minimaxTTS : voice.startsWith('azure-') ? azureTTS : voice.startsWith('gemini-') ? geminiTTS : googleTTS;
 
         const buffer = await ttsService.synthesize(
             segment.content,
