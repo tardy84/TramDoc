@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.env
+.env.*
+*.log
+.DS_Store
+Thumbs.db
+*.mp3
+*.wav
+audio/
+Audiobook_Stable_Backup.zip
