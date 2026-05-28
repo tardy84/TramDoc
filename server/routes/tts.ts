@@ -23,6 +23,13 @@ const vbeeTTS = new VbeeTTSService();
 const generatingFiles = new Set<string>();
 const providerWarnings = new Set<string>();
 const audioDir = path.resolve(process.cwd(), 'audio');
+const AUDIO_TOKEN_TTL = '15m';
+
+interface AudioAccessClaims {
+    userId: number;
+    bookId?: number;
+    chapterId?: number;
+}
 
 function isSafeVoice(voice: unknown): voice is string {
     return typeof voice === 'string' &&
@@ -59,20 +66,31 @@ function getTokenFromRequest(req: Request): string | null {
     return typeof queryToken === 'string' ? queryToken : null;
 }
 
-function getUserIdFromRequest(req: Request): number | null {
+function createAudioToken(userId: number, bookId: number, chapterId: number): string {
+    return jwt.sign({ purpose: 'audio', userId, bookId, chapterId }, JWT_SECRET, { expiresIn: AUDIO_TOKEN_TTL });
+}
+
+function getAudioAccessClaims(req: Request): AudioAccessClaims | null {
     const token = getTokenFromRequest(req);
     if (!token) return null;
 
     try {
         const decoded = jwt.verify(token, JWT_SECRET) as any;
-        return Number.isInteger(decoded?.id) ? decoded.id : null;
+        if (decoded?.purpose === 'audio') {
+            if (!Number.isInteger(decoded.userId) || !Number.isInteger(decoded.bookId) || !Number.isInteger(decoded.chapterId)) {
+                return null;
+            }
+            return { userId: decoded.userId, bookId: decoded.bookId, chapterId: decoded.chapterId };
+        }
+
+        return Number.isInteger(decoded?.id) ? { userId: decoded.id } : null;
     } catch {
         return null;
     }
 }
 
-function appendAudioToken(url: string, token: string | null): string {
-    return token ? `${url}&token=${encodeURIComponent(token)}` : url;
+function appendAudioToken(url: string, token: string): string {
+    return `${url}&token=${encodeURIComponent(token)}`;
 }
 
 function getMissingProviderConfig(voice: string): string | null {
@@ -207,13 +225,15 @@ router.post('/books/:bookId/chapters/:chapterId/tts', authenticateJWT, async (re
         }
 
         const timestamp = Date.now();
-        const audioToken = getTokenFromRequest(req);
+        const parsedBookId = parseInt(bookId as string, 10);
+        const parsedChapterId = parseInt(chapterId as string, 10);
+        const audioToken = createAudioToken(req.user.id, parsedBookId, parsedChapterId);
         const audioFiles: string[] = [];
         let allCached = true;
 
         // 1. Check if audio files for THIS VOICE already exist
         for (let i = 0; i < chapter.segments.length; i++) {
-            const fileName = buildAudioFileName(parseInt(bookId as string, 10), parseInt(chapterId as string, 10), voice, i);
+            const fileName = buildAudioFileName(parsedBookId, parsedChapterId, voice, i);
             const filePath = resolveAudioPath(fileName);
             if (!filePath) return res.status(400).json({ error: 'Tên file audio không hợp lệ' });
 
@@ -236,14 +256,14 @@ router.post('/books/:bookId/chapters/:chapterId/tts', authenticateJWT, async (re
         const PRELOAD_COUNT = 3;
 
         for (let i = 0; i < PRELOAD_COUNT; i++) {
-            const fileName = buildAudioFileName(parseInt(bookId as string, 10), parseInt(chapterId as string, 10), voice, i);
+            const fileName = buildAudioFileName(parsedBookId, parsedChapterId, voice, i);
             const filePath = resolveAudioPath(fileName);
             if (!filePath) return res.status(400).json({ error: 'Tên file audio không hợp lệ' });
 
             try {
                 await fs.access(filePath);
             } catch {
-                await generateSegment(parseInt(req.params.bookId as string), parseInt(req.params.chapterId as string), i, voice);
+                await generateSegment(parsedBookId, parsedChapterId, i, voice);
             }
         }
 
@@ -258,7 +278,7 @@ router.post('/books/:bookId/chapters/:chapterId/tts', authenticateJWT, async (re
                     const batch = chapter.segments.slice(i, i + CONCURRENCY);
                     await Promise.all(batch.map(async (_, index) => {
                         const globalIndex = i + index;
-                        await generateSegment(parseInt(req.params.bookId as string), parseInt(req.params.chapterId as string), globalIndex, voice);
+                        await generateSegment(parsedBookId, parsedChapterId, globalIndex, voice);
                     }));
 
                     if (DELAY_BETWEEN_BATCHES > 0) {
@@ -313,13 +333,17 @@ router.get('/audio/:filename', async (req: Request, res: Response) => {
         return res.status(400).send('Invalid');
     }
 
-    const userId = getUserIdFromRequest(req);
-    if (!userId) {
+    const audioAccess = getAudioAccessClaims(req);
+    if (!audioAccess) {
         return res.sendStatus(401);
     }
 
+    if (audioAccess.bookId !== undefined && (audioAccess.bookId !== bookId || audioAccess.chapterId !== chapterId)) {
+        return res.status(403).send('Forbidden');
+    }
+
     const chapter = await prisma.chapter.findFirst({
-        where: { id: chapterId, bookId, book: { userId } },
+        where: { id: chapterId, bookId, book: { userId: audioAccess.userId } },
         select: { id: true }
     });
     if (!chapter) {

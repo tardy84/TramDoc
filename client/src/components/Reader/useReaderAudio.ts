@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { Chapter } from './types';
+import { generateTTS } from '../../services/apiService';
 import { synthesize, hasApiKeys } from '../../services/ttsService';
 import { isAbortError } from '../../utils/errors';
 
@@ -387,17 +388,9 @@ export const useReaderAudio = ({
         setBrowserTTSMode(false);
 
         try {
-            // Zero-delay TTS Initialization!
-            // We instantly construct the URLs for all segments. The server's Express route
-            // /audio/:filename automatically catches 404s, generates them on-the-fly,
-            // and asynchronously triggers lookahead for the next 3 segments! No need to wait.
-            const timestamp = Date.now();
-            const token = localStorage.getItem('token');
-            const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
-            const urls = Array.from(
-                { length: chapter.segments.length },
-                (_, i) => `/audio/${bookId}_${chapter.id}_${selectedVoice}_${i}.mp3?t=${timestamp}${tokenParam}`
-            );
+            // Ask the server for signed, short-lived audio URLs. This avoids exposing
+            // the long-lived login JWT in media URLs while still enabling <audio> playback.
+            const { audioFiles: urls } = await generateTTS(bookId, chapter.id, selectedVoice);
 
             if (controller.signal.aborted || activeChapterIdRef.current !== chapter.id) return;
 
