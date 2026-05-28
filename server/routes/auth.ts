@@ -12,12 +12,19 @@ const prisma = new PrismaClient();
 router.post('/login', async (req, res) => {
     try {
         const { username, password } = req.body;
+        if (typeof username !== 'string' || typeof password !== 'string') {
+            return res.status(400).json({ error: 'Tên đăng nhập hoặc mật khẩu không hợp lệ' });
+        }
+
         const envUser = process.env.ADMIN_USERNAME;
         const envPass = process.env.ADMIN_PASSWORD;
+        if (!envUser || !envPass) {
+            return res.status(503).json({ error: 'Đăng nhập chưa được cấu hình' });
+        }
 
         if (username === envUser && password === envPass) {
             const passwordHash = await bcrypt.hash(password, 10);
-            
+
             // Upsert User ID 1 to ensure referential integrity for uploads and books
             const user = await prisma.user.upsert({
                 where: { id: 1 },
@@ -47,6 +54,10 @@ router.get('/me', authenticateJWT, async (req: AuthRequest, res) => {
 router.patch('/change-password', authenticateJWT, async (req: AuthRequest, res) => {
     try {
         const { oldPassword, newPassword } = req.body;
+        if (typeof oldPassword !== 'string' || typeof newPassword !== 'string' || newPassword.length === 0) {
+            return res.status(400).json({ error: 'Mật khẩu không hợp lệ' });
+        }
+
         const user = await prisma.user.findUnique({ where: { id: req.user.id } });
 
         if (!user || !user.passwordHash) {
