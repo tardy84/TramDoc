@@ -217,8 +217,6 @@ router.post('/books/:bookId/chapters/:chapterId/tts', authenticateJWT, async (re
 
         await fs.mkdir(audioDir, { recursive: true });
 
-        // CACHE DISABLED - To allow voice/engine changes
-        // TODO: Re-enable cache with voice settings in cache key
         const { voice } = req.body;
         if (!isSafeVoice(voice)) {
             return res.status(400).json({ error: 'Giọng đọc không hợp lệ' });
