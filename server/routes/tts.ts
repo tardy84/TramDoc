@@ -56,6 +56,26 @@ function resolveAudioPath(fileName: string): string | null {
     return resolved;
 }
 
+function parsePositiveInt(value: unknown): number | null {
+    if (typeof value !== 'string' && typeof value !== 'number') return null;
+
+    const text = String(value);
+    if (!/^\d+$/.test(text)) return null;
+
+    const id = Number(text);
+    return Number.isInteger(id) && id > 0 ? id : null;
+}
+
+function parseNonNegativeInt(value: unknown): number | null {
+    if (typeof value !== 'string' && typeof value !== 'number') return null;
+
+    const text = String(value);
+    if (!/^\d+$/.test(text)) return null;
+
+    const id = Number(text);
+    return Number.isInteger(id) && id >= 0 ? id : null;
+}
+
 function getTokenFromRequest(req: Request): string | null {
     const authHeader = req.headers.authorization;
     if (authHeader?.startsWith('Bearer ')) {
@@ -200,12 +220,16 @@ async function generateSegment(bookId: number, chapterId: number, segmentIndex: 
 // Generate TTS for a specific book chapter
 router.post('/books/:bookId/chapters/:chapterId/tts', authenticateJWT, async (req: AuthRequest, res: Response) => {
     try {
-        const { bookId, chapterId } = req.params;
+        const parsedBookId = parsePositiveInt(req.params.bookId);
+        const parsedChapterId = parsePositiveInt(req.params.chapterId);
+        if (!parsedBookId || !parsedChapterId) {
+            return res.status(400).json({ error: 'Book hoặc chapter ID không hợp lệ' });
+        }
 
         const chapter = await prisma.chapter.findFirst({
             where: {
-                id: parseInt(chapterId as string),
-                bookId: parseInt(bookId as string),
+                id: parsedChapterId,
+                bookId: parsedBookId,
                 book: { userId: req.user.id }
             },
             include: { segments: { orderBy: { orderIndex: 'asc' } } },
@@ -223,8 +247,6 @@ router.post('/books/:bookId/chapters/:chapterId/tts', authenticateJWT, async (re
         }
 
         const timestamp = Date.now();
-        const parsedBookId = parseInt(bookId as string, 10);
-        const parsedChapterId = parseInt(chapterId as string, 10);
         const audioToken = createAudioToken(req.user.id, parsedBookId, parsedChapterId);
         const audioFiles: string[] = [];
         let allCached = true;
@@ -245,12 +267,12 @@ router.post('/books/:bookId/chapters/:chapterId/tts', authenticateJWT, async (re
         }
 
         if (allCached) {
-            console.log(`[TTS Cache] ✅ Using cached audio for book ${bookId}, chapter ${chapterId}, voice ${voice}`);
+            console.log(`[TTS Cache] ✅ Using cached audio for book ${parsedBookId}, chapter ${parsedChapterId}, voice ${voice}`);
             return res.json({ audioFiles });
         }
 
         // 2. Generate missing segments
-        console.log(`[TTS] Generating missing audio for book ${bookId}, chapter ${chapterId} with voice ${voice}`);
+        console.log(`[TTS] Generating missing audio for book ${parsedBookId}, chapter ${parsedChapterId} with voice ${voice}`);
         const PRELOAD_COUNT = 3;
 
         for (let i = 0; i < PRELOAD_COUNT; i++) {
@@ -307,27 +329,30 @@ router.get('/audio/:filename', async (req: Request, res: Response) => {
     // Removing query params from filename if present in request param (express usually handles this, 
     // but client sends ?t=..., express :filename does NOT include query string. So this is safe.)
 
-    let bookId, chapterId, segmentIndex, voice: string;
+    let bookId: number | null = null;
+    let chapterId: number | null = null;
+    let segmentIndex: number | null = null;
+    let voice = '';
 
     // Parse: {bookId}_{chapterId}_{voice}_{segmentIndex}.mp3
     // Voice can contain underscores (e.g. vbee-n_hn_male_xxx), so we extract
     // first part = bookId, last part = segmentIndex, middle = chapterId + voice
     if (parts.length >= 4) {
-        bookId = parseInt(parts[0], 10);
-        segmentIndex = parseInt(parts[parts.length - 1], 10);
+        bookId = parsePositiveInt(parts[0]);
+        segmentIndex = parseNonNegativeInt(parts[parts.length - 1]);
         // Second part is chapterId, everything between part[1] and part[last-1] is voice
-        chapterId = parseInt(parts[1], 10);
+        chapterId = parsePositiveInt(parts[1]);
         voice = parts.slice(2, parts.length - 1).join('_');
     } else if (parts.length === 3) {
-        bookId = parseInt(parts[0], 10);
-        chapterId = parseInt(parts[1], 10);
-        segmentIndex = parseInt(parts[2], 10);
+        bookId = parsePositiveInt(parts[0]);
+        chapterId = parsePositiveInt(parts[1]);
+        segmentIndex = parseNonNegativeInt(parts[2]);
         voice = 'vi-VN-Wavenet-B'; // Default legacy voice
     } else {
         return res.status(400).send('Invalid');
     }
 
-    if (!Number.isInteger(bookId) || !Number.isInteger(chapterId) || !Number.isInteger(segmentIndex) || !isSafeVoice(voice)) {
+    if (!bookId || !chapterId || segmentIndex === null || !isSafeVoice(voice)) {
         return res.status(400).send('Invalid');
     }
 
