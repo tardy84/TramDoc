@@ -85,7 +85,16 @@ router.delete('/users/:id', authenticateAdmin, async (req: AuthRequest, res: Res
         if (id === req.user?.id) {
             return res.status(400).json({ error: 'Cannot delete yourself' });
         }
+        const books = await prisma.book.findMany({
+            where: { userId: id },
+            select: { id: true, coverImagePath: true }
+        });
+
         await prisma.user.delete({ where: { id } });
+        for (const book of books) {
+            await cleanupBookFiles(book.id, book.coverImagePath);
+        }
+
         res.json({ success: true });
     } catch (error: any) {
         res.status(500).json({ error: error.message });
