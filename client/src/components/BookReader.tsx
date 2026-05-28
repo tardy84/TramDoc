@@ -222,8 +222,13 @@ export default function BookReader({ bookId, onClose }: BookReaderProps) {
     const toggleBookmark = async (segment: Segment) => {
         const existing = bookmarks.find(b => b.segmentId === segment.id);
         if (existing) {
-            setBookmarks(prev => prev.filter(b => b.id !== existing.id));
-            await deleteBookmarkApi(existing.id);
+            try {
+                await deleteBookmarkApi(existing.id);
+                setBookmarks(prev => prev.filter(b => b.id !== existing.id));
+                showToast('Đã xóa dấu trang', 'success');
+            } catch {
+                showToast('Lỗi khi xóa dấu trang', 'error');
+            }
         } else {
             setEditingBookmark({ segment, chapterId: chapters[currentChapterIndex].id, note: '' });
         }
