@@ -11,6 +11,8 @@ import { Book, User } from './types';
 import { getAllBooks, deleteBook as deleteBookApi, uploadBook, getUploadStatus } from './services/apiService';
 import { getErrorMessage } from './utils/errors';
 
+const MAX_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024;
+
 function MainApp({
     books,
     loadBooks,
@@ -43,8 +45,12 @@ function MainApp({
     const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];
         if (!file) return;
-        if (!file.name.endsWith('.epub')) {
+        if (!file.name.toLowerCase().endsWith('.epub')) {
             showToast('Vui lòng chọn file EPUB', 'error');
+            return;
+        }
+        if (file.size > MAX_UPLOAD_SIZE_BYTES) {
+            showToast('File EPUB quá lớn. Vui lòng chọn file tối đa 50MB.', 'error');
             return;
         }
 
