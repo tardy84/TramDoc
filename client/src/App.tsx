@@ -47,10 +47,12 @@ function MainApp({
         if (!file) return;
         if (!file.name.toLowerCase().endsWith('.epub')) {
             showToast('Vui lòng chọn file EPUB', 'error');
+            event.currentTarget.value = '';
             return;
         }
         if (file.size > MAX_UPLOAD_SIZE_BYTES) {
             showToast('File EPUB quá lớn. Vui lòng chọn file tối đa 50MB.', 'error');
+            event.currentTarget.value = '';
             return;
         }
 
