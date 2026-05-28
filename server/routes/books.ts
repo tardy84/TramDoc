@@ -38,6 +38,7 @@ const handleBookUpload = (req: Request, res: Response, next: NextFunction) => {
 
 // Simple in-memory store for upload progress
 interface UploadJob {
+    userId: number;
     progress: number;
     status: string;
     error?: string;
@@ -54,9 +55,17 @@ function parsePositiveInt(value: unknown): number | null {
     return Number.isInteger(id) && id > 0 ? id : null;
 }
 
+function isSafeJobId(value: unknown): value is string {
+    return typeof value === 'string' &&
+        value.length > 0 &&
+        value.length <= 100 &&
+        /^[A-Za-z0-9_-]+$/.test(value);
+}
+
 // EPUB upload and processing
 router.post('/upload', authenticateJWT, handleBookUpload, async (req: AuthRequest, res: Response) => {
-    const jobId = req.body.jobId as string;
+    const rawJobId = req.body.jobId;
+    const jobId = isSafeJobId(rawJobId) ? rawJobId : null;
     const userId = req.user.id;
     let tempFilePath: string | undefined;
 
@@ -66,14 +75,18 @@ router.post('/upload', authenticateJWT, handleBookUpload, async (req: AuthReques
         }
         tempFilePath = req.file.path;
 
+        if (rawJobId && !jobId) {
+            return res.status(400).json({ error: 'Job ID không hợp lệ' });
+        }
+
         if (jobId) {
-            uploadJobs[jobId] = { progress: 0, status: 'Starting processing...' };
+            uploadJobs[jobId] = { userId, progress: 0, status: 'Starting processing...' };
         }
 
         // Process the EPUB file with progress reporting
         const bookId = await epubProcessor.processEpub(req.file.path, (progress: number, status: string) => {
             if (jobId) {
-                uploadJobs[jobId] = { progress, status };
+                uploadJobs[jobId] = { userId, progress, status };
             }
         });
 
@@ -84,14 +97,14 @@ router.post('/upload', authenticateJWT, handleBookUpload, async (req: AuthReques
         });
 
         if (jobId) {
-            uploadJobs[jobId] = { progress: 100, status: 'Complete' };
+            uploadJobs[jobId] = { userId, progress: 100, status: 'Complete' };
         }
 
         res.json({ message: 'EPUB processed successfully', bookId });
     } catch (error: any) {
         console.error('Error processing EPUB:', error);
         if (jobId) {
-            uploadJobs[jobId] = { progress: 0, status: 'Error', error: error.message };
+            uploadJobs[jobId] = { userId, progress: 0, status: 'Error', error: error.message };
         }
         res.status(500).json({ error: error.message });
     } finally {
@@ -102,15 +115,19 @@ router.post('/upload', authenticateJWT, handleBookUpload, async (req: AuthReques
 });
 
 // Get upload status
-router.get('/upload-status/:jobId', authenticateJWT, (req: Request, res: Response) => {
-    const jobId = req.params.jobId as string;
+router.get('/upload-status/:jobId', authenticateJWT, (req: AuthRequest, res: Response) => {
+    const jobId = req.params.jobId;
+    if (!isSafeJobId(jobId)) {
+        return res.status(400).json({ error: 'Job ID không hợp lệ' });
+    }
+
     const job = uploadJobs[jobId];
 
-    if (!job) {
+    if (!job || job.userId !== req.user.id) {
         return res.status(404).json({ error: 'Job not found' });
     }
 
-    res.json(job);
+    res.json({ progress: job.progress, status: job.status, error: job.error });
 
     if (job.progress === 100 || job.status === 'Error') {
         setTimeout(() => delete uploadJobs[jobId], 30000);
