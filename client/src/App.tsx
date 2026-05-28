@@ -59,40 +59,38 @@ function MainApp({
         setProgress(0);
         setUploadStatus('Đang tải lên...');
 
+        let pollInterval: ReturnType<typeof setInterval> | null = null;
         try {
-            await uploadBook(file, jobId);
-            
-            // Poll for status
-            const pollInterval = setInterval(async () => {
+            pollInterval = setInterval(async () => {
                 try {
                     const status = await getUploadStatus(jobId);
                     setProgress(status.progress);
                     setUploadStatus(status.status);
 
-                    if (status.progress === 100) {
-                        clearInterval(pollInterval);
-                        await loadBooks();
-                        setUploadStatus('Hoàn tất!');
-                        setTimeout(() => {
-                            setUploading(false);
-                            showToast(`Sách "${file.name}" đã xử lý thành công!`);
-                        }, 1000);
-                    } else if (status.error) {
-                        clearInterval(pollInterval);
-                        throw new Error(status.error);
+                    if (status.error) {
+                        setUploadStatus(status.error);
                     }
-                } catch (err) {
-                    clearInterval(pollInterval);
-                    setUploadStatus('Lỗi');
-                    showToast(getErrorMessage(err, 'Lỗi xử lý EPUB'), 'error');
-                    setUploading(false);
+                } catch {
+                    // The upload request may not have created the job yet.
                 }
             }, 1000);
 
+            await uploadBook(file, jobId);
+            if (pollInterval) clearInterval(pollInterval);
+            setProgress(100);
+            setUploadStatus('Hoàn tất!');
+            await loadBooks();
+            setTimeout(() => {
+                setUploading(false);
+                showToast(`Sách "${file.name}" đã xử lý thành công!`);
+            }, 1000);
         } catch (error) {
+            if (pollInterval) clearInterval(pollInterval);
             setUploadStatus('Lỗi');
             showToast(getErrorMessage(error, 'Lỗi tải sách'), 'error');
             setUploading(false);
+        } finally {
+            event.currentTarget.value = '';
         }
     };
 
