@@ -253,8 +253,23 @@ router.post('/progress/:bookId', authenticateJWT, async (req: AuthRequest, res: 
             return res.status(400).json({ error: 'Dữ liệu tiến độ không hợp lệ' });
         }
 
-        const book = await prisma.book.findFirst({ where: { id: bookId, userId }, select: { id: true } });
+        const book = await prisma.book.findFirst({
+            where: { id: bookId, userId },
+            select: {
+                id: true,
+                chapters: {
+                    orderBy: { orderIndex: 'asc' },
+                    select: { _count: { select: { segments: true } } }
+                }
+            }
+        });
         if (!book) return res.status(404).json({ error: 'Book not found' });
+
+        const chapter = book.chapters[chapterIndex];
+        const maxSegmentIndex = Math.max((chapter?._count.segments ?? 0) - 1, 0);
+        if (!chapter || segmentIndex > maxSegmentIndex) {
+            return res.status(400).json({ error: 'Vị trí đọc không hợp lệ' });
+        }
 
         const progress = await prisma.userProgress.upsert({
             where: { userId_bookId: { userId, bookId } },
