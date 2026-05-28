@@ -44,6 +44,16 @@ interface UploadJob {
 }
 export const uploadJobs: Record<string, UploadJob> = {};
 
+function parsePositiveInt(value: unknown): number | null {
+    if (typeof value !== 'string' && typeof value !== 'number') return null;
+
+    const text = String(value);
+    if (!/^\d+$/.test(text)) return null;
+
+    const id = Number(text);
+    return Number.isInteger(id) && id > 0 ? id : null;
+}
+
 // EPUB upload and processing
 router.post('/upload', authenticateJWT, handleBookUpload, async (req: AuthRequest, res: Response) => {
     const jobId = req.body.jobId as string;
@@ -165,7 +175,11 @@ router.get('/books', authenticateJWT, async (req: AuthRequest, res: Response) =>
 // Get a single book
 router.get('/books/:id', authenticateJWT, async (req: AuthRequest, res: Response) => {
     try {
-        const bookId = parseInt(req.params.id as string);
+        const bookId = parsePositiveInt(req.params.id);
+        if (!bookId) {
+            return res.status(400).json({ error: 'Book ID không hợp lệ' });
+        }
+
         const book = await prisma.book.findFirst({
             where: { id: bookId, userId: req.user.id },
             include: {
@@ -187,7 +201,11 @@ router.get('/books/:id', authenticateJWT, async (req: AuthRequest, res: Response
 // Delete a book
 router.delete('/books/:id', authenticateJWT, async (req: AuthRequest, res: Response) => {
     try {
-        const bookId = parseInt(req.params.id as string);
+        const bookId = parsePositiveInt(req.params.id);
+        if (!bookId) {
+            return res.status(400).json({ error: 'Book ID không hợp lệ' });
+        }
+
         const book = await prisma.book.findFirst({
             where: { id: bookId, userId: req.user.id }
         });
@@ -210,11 +228,11 @@ router.delete('/books/:id', authenticateJWT, async (req: AuthRequest, res: Respo
 
 router.post('/progress/:bookId', authenticateJWT, async (req: AuthRequest, res: Response) => {
     try {
-        const bookId = parseInt(req.params.bookId as string, 10);
+        const bookId = parsePositiveInt(req.params.bookId);
         const userId = req.user.id;
         const { chapterIndex, segmentIndex } = req.body;
 
-        if (!Number.isInteger(bookId) || !Number.isInteger(chapterIndex) || !Number.isInteger(segmentIndex) || chapterIndex < 0 || segmentIndex < 0) {
+        if (!bookId || !Number.isInteger(chapterIndex) || !Number.isInteger(segmentIndex) || chapterIndex < 0 || segmentIndex < 0) {
             return res.status(400).json({ error: 'Dữ liệu tiến độ không hợp lệ' });
         }
 
@@ -235,8 +253,8 @@ router.post('/progress/:bookId', authenticateJWT, async (req: AuthRequest, res: 
 router.get('/progress/:bookId', authenticateJWT, async (req: AuthRequest, res: Response) => {
     try {
         const userId = req.user.id;
-        const bookId = parseInt(req.params.bookId as string, 10);
-        if (!Number.isInteger(bookId)) {
+        const bookId = parsePositiveInt(req.params.bookId);
+        if (!bookId) {
             return res.status(400).json({ error: 'Book ID không hợp lệ' });
         }
 
@@ -255,7 +273,11 @@ router.get('/progress/:bookId', authenticateJWT, async (req: AuthRequest, res: R
 // Bookmark Endpoints
 router.get('/books/:bookId/bookmarks', authenticateJWT, async (req: AuthRequest, res: Response) => {
     try {
-        const bookId = parseInt(req.params.bookId as string);
+        const bookId = parsePositiveInt(req.params.bookId);
+        if (!bookId) {
+            return res.status(400).json({ error: 'Book ID không hợp lệ' });
+        }
+
         const bookmarks = await prisma.bookmark.findMany({
             where: { bookId, chapter: { book: { userId: req.user.id } } },
             orderBy: { createdAt: 'desc' },
@@ -269,12 +291,12 @@ router.get('/books/:bookId/bookmarks', authenticateJWT, async (req: AuthRequest,
 
 router.post('/bookmarks', authenticateJWT, async (req: AuthRequest, res: Response) => {
     try {
-        const bookId = parseInt(req.body.bookId, 10);
-        const chapterId = parseInt(req.body.chapterId, 10);
-        const segmentId = parseInt(req.body.segmentId, 10);
+        const bookId = parsePositiveInt(req.body.bookId);
+        const chapterId = parsePositiveInt(req.body.chapterId);
+        const segmentId = parsePositiveInt(req.body.segmentId);
         const { previewText, note } = req.body;
 
-        if (!Number.isInteger(bookId) || !Number.isInteger(chapterId) || !Number.isInteger(segmentId) || !previewText) {
+        if (!bookId || !chapterId || !segmentId || typeof previewText !== 'string' || previewText.length === 0) {
             return res.status(400).json({ error: 'Dữ liệu bookmark không hợp lệ' });
         }
 
@@ -301,8 +323,8 @@ router.post('/bookmarks', authenticateJWT, async (req: AuthRequest, res: Respons
 // Delete a bookmark
 router.delete('/bookmarks/:id', authenticateJWT, async (req: AuthRequest, res: Response) => {
     try {
-        const id = parseInt(req.params.id as string, 10);
-        if (!Number.isInteger(id)) {
+        const id = parsePositiveInt(req.params.id);
+        if (!id) {
             return res.status(400).json({ error: 'Bookmark ID không hợp lệ' });
         }
 
