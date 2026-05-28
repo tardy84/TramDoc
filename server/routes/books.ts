@@ -290,13 +290,30 @@ router.get('/progress/:bookId', authenticateJWT, async (req: AuthRequest, res: R
             return res.status(400).json({ error: 'Book ID không hợp lệ' });
         }
 
-        const book = await prisma.book.findFirst({ where: { id: bookId, userId }, select: { id: true } });
+        const book = await prisma.book.findFirst({
+            where: { id: bookId, userId },
+            select: {
+                id: true,
+                chapters: {
+                    orderBy: { orderIndex: 'asc' },
+                    select: { _count: { select: { segments: true } } }
+                }
+            }
+        });
         if (!book) return res.status(404).json({ error: 'Book not found' });
 
         const progress = await prisma.userProgress.findUnique({
             where: { userId_bookId: { userId, bookId } }
         });
-        res.json(progress || { chapterIndex: 0, segmentIndex: 0 });
+        if (!progress || book.chapters.length === 0) {
+            return res.json({ chapterIndex: 0, segmentIndex: 0 });
+        }
+
+        const chapterIndex = Math.min(Math.max(progress.chapterIndex, 0), book.chapters.length - 1);
+        const maxSegmentIndex = Math.max(book.chapters[chapterIndex]._count.segments - 1, 0);
+        const segmentIndex = Math.min(Math.max(progress.segmentIndex, 0), maxSegmentIndex);
+
+        res.json({ ...progress, chapterIndex, segmentIndex });
     } catch (error: any) {
         res.status(500).json({ error: error.message });
     }
