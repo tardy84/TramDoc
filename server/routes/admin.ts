@@ -8,6 +8,21 @@ import { authenticateAdmin, AuthRequest } from '../middleware/auth.js';
 const router = Router();
 const prisma = new PrismaClient();
 
+function parsePositiveInt(value: string): number | null {
+    if (!/^\d+$/.test(value)) return null;
+    const id = Number(value);
+    return Number.isInteger(id) && id > 0 ? id : null;
+}
+
+function parsePositiveIntArray(value: unknown): number[] | null {
+    if (!Array.isArray(value)) return null;
+
+    const ids = value.map(id => parsePositiveInt(String(id)));
+    if (ids.some(id => id === null)) return null;
+
+    return Array.from(new Set(ids as number[]));
+}
+
 // --- ADMIN ENDPOINTS ---
 router.get('/stats', authenticateAdmin, async (req: AuthRequest, res: Response) => {
     try {
@@ -62,7 +77,11 @@ router.get('/books', authenticateAdmin, async (req: AuthRequest, res: Response) 
 
 router.delete('/users/:id', authenticateAdmin, async (req: AuthRequest, res: Response) => {
     try {
-        const id = parseInt(req.params.id as string, 10);
+        const id = parsePositiveInt(req.params.id as string);
+        if (!id) {
+            return res.status(400).json({ error: 'ID người dùng không hợp lệ' });
+        }
+
         if (id === req.user?.id) {
             return res.status(400).json({ error: 'Cannot delete yourself' });
         }
@@ -75,8 +94,15 @@ router.delete('/users/:id', authenticateAdmin, async (req: AuthRequest, res: Res
 
 router.patch('/users/:id/password', authenticateAdmin, async (req: AuthRequest, res: Response) => {
     try {
-        const id = parseInt(req.params.id as string, 10);
+        const id = parsePositiveInt(req.params.id as string);
+        if (!id) {
+            return res.status(400).json({ error: 'ID người dùng không hợp lệ' });
+        }
+
         const { newPassword } = req.body;
+        if (typeof newPassword !== 'string' || newPassword.length === 0) {
+            return res.status(400).json({ error: 'Mật khẩu mới không hợp lệ' });
+        }
 
         const passwordHash = await bcrypt.hash(newPassword, 10);
         await prisma.user.update({
@@ -92,7 +118,11 @@ router.patch('/users/:id/password', authenticateAdmin, async (req: AuthRequest, 
 
 router.delete('/books/:id', authenticateAdmin, async (req: AuthRequest, res: Response) => {
     try {
-        const id = parseInt(req.params.id as string, 10);
+        const id = parsePositiveInt(req.params.id as string);
+        if (!id) {
+            return res.status(400).json({ error: 'ID sách không hợp lệ' });
+        }
+
         const book = await prisma.book.findUnique({ where: { id } });
         if (!book) return res.status(404).json({ error: 'Book not found' });
 
@@ -111,14 +141,15 @@ router.delete('/books/:id', authenticateAdmin, async (req: AuthRequest, res: Res
 router.post('/books/bulk-delete', authenticateAdmin, async (req: AuthRequest, res: Response) => {
     try {
         const { ids } = req.body;
-        if (!Array.isArray(ids)) return res.status(400).json({ error: 'IDs must be an array' });
+        const parsedIds = parsePositiveIntArray(ids);
+        if (!parsedIds) return res.status(400).json({ error: 'Danh sách ID sách không hợp lệ' });
 
         const books = await prisma.book.findMany({
-            where: { id: { in: ids.map((id: any) => parseInt(id.toString())) } }
+            where: { id: { in: parsedIds } }
         });
 
         await prisma.book.deleteMany({
-            where: { id: { in: ids.map((id: any) => parseInt(id.toString())) } }
+            where: { id: { in: parsedIds } }
         });
 
         // Cleanup files
