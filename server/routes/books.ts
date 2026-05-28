@@ -12,6 +12,8 @@ const epubProcessor = new EpubProcessor();
 
 // Upload configuration
 const MAX_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024;
+const MAX_BOOKMARK_PREVIEW_LENGTH = 1000;
+const MAX_BOOKMARK_NOTE_LENGTH = 2000;
 const upload = multer({
     dest: 'uploads/',
     limits: { fileSize: MAX_UPLOAD_SIZE_BYTES },
@@ -60,6 +62,14 @@ function isSafeJobId(value: unknown): value is string {
         value.length > 0 &&
         value.length <= 100 &&
         /^[A-Za-z0-9_-]+$/.test(value);
+}
+
+function normalizeBookmarkNote(value: unknown): string | null {
+    if (value === undefined || value === null) return null;
+    if (typeof value !== 'string') return null;
+
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
 }
 
 // EPUB upload and processing
@@ -344,8 +354,18 @@ router.post('/bookmarks', authenticateJWT, async (req: AuthRequest, res: Respons
         const chapterId = parsePositiveInt(req.body.chapterId);
         const segmentId = parsePositiveInt(req.body.segmentId);
         const { previewText, note } = req.body;
+        const normalizedPreviewText = typeof previewText === 'string' ? previewText.trim() : '';
+        const normalizedNote = normalizeBookmarkNote(note);
 
-        if (!bookId || !chapterId || !segmentId || typeof previewText !== 'string' || previewText.length === 0) {
+        if (!bookId || !chapterId || !segmentId || normalizedPreviewText.length === 0 || normalizedPreviewText.length > MAX_BOOKMARK_PREVIEW_LENGTH) {
+            return res.status(400).json({ error: 'Dữ liệu bookmark không hợp lệ' });
+        }
+
+        if (note !== undefined && note !== null && typeof note !== 'string') {
+            return res.status(400).json({ error: 'Dữ liệu bookmark không hợp lệ' });
+        }
+
+        if (normalizedNote && normalizedNote.length > MAX_BOOKMARK_NOTE_LENGTH) {
             return res.status(400).json({ error: 'Dữ liệu bookmark không hợp lệ' });
         }
 
@@ -361,7 +381,7 @@ router.post('/bookmarks', authenticateJWT, async (req: AuthRequest, res: Respons
         if (!segment) return res.status(404).json({ error: 'Segment not found' });
 
         const bookmark = await prisma.bookmark.create({
-            data: { bookId, chapterId, segmentId, previewText, note }
+            data: { bookId, chapterId, segmentId, previewText: normalizedPreviewText, note: normalizedNote }
         });
         res.json(bookmark);
     } catch (error: any) {
