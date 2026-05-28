@@ -379,6 +379,16 @@ function App() {
         }
     }, [token, loadBooks]);
 
+    useEffect(() => {
+        const handleAuthExpired = () => {
+            setBooks([]);
+            setToken(null);
+        };
+
+        window.addEventListener('tramdoc-auth-expired', handleAuthExpired);
+        return () => window.removeEventListener('tramdoc-auth-expired', handleAuthExpired);
+    }, []);
+
     const handleLogin = (newToken: string, user: User) => {
         localStorage.setItem('token', newToken);
         localStorage.setItem('user', JSON.stringify(user));

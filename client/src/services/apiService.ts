@@ -15,6 +15,20 @@ api.interceptors.request.use(config => {
     return config;
 });
 
+api.interceptors.response.use(
+    response => response,
+    error => {
+        if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403) && localStorage.getItem('token')) {
+            localStorage.removeItem('token');
+            localStorage.removeItem('audiobook_token');
+            localStorage.removeItem('user');
+            window.dispatchEvent(new Event('tramdoc-auth-expired'));
+        }
+
+        return Promise.reject(error);
+    }
+);
+
 // --- Book Management APIs ---
 
 export const uploadBook = async (file: File, jobId?: string): Promise<{ message: string, bookId: number }> => {
