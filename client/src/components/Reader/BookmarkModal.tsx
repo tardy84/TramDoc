@@ -1,6 +1,8 @@
 import React from 'react';
 import { Segment } from './types';
 
+const MAX_BOOKMARK_NOTE_LENGTH = 2000;
+
 interface BookmarkModalProps {
     editingBookmark: { segment: Segment, chapterId: number, note: string } | null;
     setEditingBookmark: (val: { segment: Segment, chapterId: number, note: string } | null) => void;
@@ -34,8 +36,12 @@ const BookmarkModal: React.FC<BookmarkModalProps> = ({
                             placeholder="Viết cảm nghĩ hoặc ghi chú nhanh về đoạn này..."
                             value={editingBookmark?.note || ''}
                             onChange={(e) => setEditingBookmark({ ...editingBookmark, note: e.target.value })}
+                            maxLength={MAX_BOOKMARK_NOTE_LENGTH}
                             className="w-full bg-black/40 border border-white/5 rounded-2xl p-4 text-white focus:outline-none focus:border-emerald-500 transition-all h-32 resize-none"
                         />
+                        <div className="mt-2 text-right text-[10px] font-bold text-white/30">
+                            {(editingBookmark?.note || '').length}/{MAX_BOOKMARK_NOTE_LENGTH}
+                        </div>
                     </div>
 
                     <div className="flex gap-4">

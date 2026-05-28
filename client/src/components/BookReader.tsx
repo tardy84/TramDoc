@@ -70,6 +70,8 @@ const THEMES: Record<ThemeMode, ThemeStyles> = {
     }
 };
 
+const MAX_BOOKMARK_PREVIEW_LENGTH = 1000;
+
 interface BookReaderProps {
     bookId: number;
     onClose: () => void;
@@ -234,8 +236,8 @@ export default function BookReader({ bookId, onClose }: BookReaderProps) {
                 bookId,
                 chapterId: editingBookmark.chapterId,
                 segmentId: editingBookmark.segment.id,
-                previewText: editingBookmark.segment.content,
-                note: editingBookmark.note
+                previewText: editingBookmark.segment.content.slice(0, MAX_BOOKMARK_PREVIEW_LENGTH),
+                note: editingBookmark.note.trim()
             });
             // Enrich with chapter info
             const chapter = chapters.find(c => c.id === editingBookmark.chapterId);
