@@ -5,6 +5,7 @@ import multer from 'multer';
 import fs from 'fs/promises';
 import { authenticateJWT, AuthRequest } from '../middleware/auth.js';
 import { EpubProcessor } from '../services/epubProcessor.js';
+import { cleanupBookFiles } from '../services/bookFileCleanup.js';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -241,9 +242,7 @@ router.delete('/books/:id', authenticateJWT, async (req: AuthRequest, res: Respo
 
         await prisma.book.delete({ where: { id: bookId } });
 
-        if (book.coverImagePath) {
-            fs.unlink(book.coverImagePath).catch(() => { });
-        }
+        await cleanupBookFiles(bookId, book.coverImagePath);
 
         res.json({ message: 'Book deleted successfully', bookId });
     } catch (error: any) {

@@ -1,9 +1,9 @@
 import { Router, Response } from 'express';
 import bcrypt from 'bcryptjs';
-import fs from 'fs/promises';
 import path from 'path';
 import { PrismaClient } from '@prisma/client';
 import { authenticateAdmin, AuthRequest } from '../middleware/auth.js';
+import { cleanupBookFiles } from '../services/bookFileCleanup.js';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -128,9 +128,7 @@ router.delete('/books/:id', authenticateAdmin, async (req: AuthRequest, res: Res
 
         await prisma.book.delete({ where: { id } });
 
-        if (book.coverImagePath) {
-            fs.unlink(book.coverImagePath).catch(() => { });
-        }
+        await cleanupBookFiles(id, book.coverImagePath);
 
         res.json({ success: true });
     } catch (error: any) {
@@ -154,9 +152,7 @@ router.post('/books/bulk-delete', authenticateAdmin, async (req: AuthRequest, re
 
         // Cleanup files
         for (const book of books) {
-            if (book.coverImagePath) {
-                fs.unlink(book.coverImagePath).catch(() => { });
-            }
+            await cleanupBookFiles(book.id, book.coverImagePath);
         }
 
         res.json({ success: true, count: books.length });
