@@ -1,9 +1,10 @@
 import React from 'react';
 import { API_BASE_URL } from '../../constants';
 import ConfirmModal from '../Shared/ConfirmModal';
+import { AdminBook } from '../../types';
 
 interface AdminBookListProps {
-    books: any[];
+    books: AdminBook[];
     searchQuery: string;
     setSearchQuery: (q: string) => void;
     onDeleteBook: (id: number) => Promise<void>;
@@ -95,7 +96,7 @@ const AdminBookList: React.FC<AdminBookListProps> = ({ books, searchQuery, setSe
             )}
 
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-3 md:gap-4">
-                {filteredBooks.map((b: any) => (
+                {filteredBooks.map((b) => (
                     <div
                         key={b.id}
                         className={`flex flex-col group animate-in fade-in zoom-in-95 duration-300 relative ${selectedIds.has(b.id) ? 'scale-[0.98]' : ''}`}

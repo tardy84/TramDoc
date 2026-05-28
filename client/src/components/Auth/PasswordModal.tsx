@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
+import { AxiosInstance } from 'axios';
+import { getErrorMessage } from '../../utils/errors';
 
 interface PasswordModalProps {
     isOpen: boolean;
     onClose: () => void;
-    authAxios: any;
+    authAxios: AxiosInstance;
 }
 
 const PasswordModal: React.FC<PasswordModalProps> = ({ isOpen, onClose, authAxios }) => {
@@ -45,8 +47,8 @@ const PasswordModal: React.FC<PasswordModalProps> = ({ isOpen, onClose, authAxio
                 setConfirmPassword('');
                 setSuccess('');
             }, 2000);
-        } catch (err: any) {
-            setError(err.response?.data?.error || 'Lớp có lỗi xảy ra');
+        } catch (err) {
+            setError(getErrorMessage(err, 'Lớp có lỗi xảy ra'));
         } finally {
             setLoading(false);
         }

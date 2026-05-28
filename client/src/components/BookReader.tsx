@@ -9,14 +9,15 @@ import SettingsPanel from './Reader/SettingsPanel';
 import BookmarkModal from './Reader/BookmarkModal';
 
 // Types & Hooks
-import { ThemeMode, Book, Chapter, Bookmark, Segment } from './Reader/types';
+import { ThemeMode, ThemeStyles, Book, Chapter, Bookmark, Segment } from './Reader/types';
 import { useReaderAudio } from './Reader/useReaderAudio';
 import { useReaderProgress } from './Reader/useReaderProgress';
 
 // Local database
 import { getBook, getBookmarks, createBookmark, deleteBookmark as deleteBookmarkApi } from '../services/apiService';
+import { getErrorMessage } from '../utils/errors';
 
-const THEMES: Record<ThemeMode, { container: string, text: string, card: string, active: string, header: string, btn: string, backBtn: string, paper: string }> = {
+const THEMES: Record<ThemeMode, ThemeStyles> = {
     midnight: {
         container: 'bg-[#0f172a]',
         text: 'text-gray-200',
@@ -131,6 +132,7 @@ export default function BookReader({ bookId, onClose }: BookReaderProps) {
         getGlobalAudio,
         setGlobalAudio
     });
+    const { isPlaying, setIsPlaying } = audio;
 
     useReaderProgress({
         bookId,
@@ -154,15 +156,15 @@ export default function BookReader({ bookId, onClose }: BookReaderProps) {
                     setLoading(false);
                     return;
                 }
-                setBook(serverBook as any);
-                setChapters(serverBook.chapters as any[]);
+                setBook(serverBook);
+                setChapters(serverBook.chapters);
 
                 const serverBookmarks = await getBookmarks(bookId);
                 setBookmarks(serverBookmarks as Bookmark[]);
                 setLoading(false);
-            } catch (e: any) {
+            } catch (e) {
                 console.error('Failed to load book:', e);
-                setError(e.message || 'Lỗi đọc dữ liệu sách.');
+                setError(getErrorMessage(e, 'Lỗi đọc dữ liệu sách.'));
                 setLoading(false);
             }
         };
@@ -181,12 +183,12 @@ export default function BookReader({ bookId, onClose }: BookReaderProps) {
 
     // Sleep Timer Logic
     useEffect(() => {
-        if (sleepTimer === null || !audio.isPlaying) return;
+        if (sleepTimer === null || !isPlaying) return;
         const interval = setInterval(() => {
             setSleepTimer(prev => {
                 if (prev === null) return null;
                 if (prev <= 1) {
-                    audio.setIsPlaying(false);
+                    setIsPlaying(false);
                     const globalAudio = getGlobalAudio();
                     if (globalAudio) globalAudio.pause();
                     window.speechSynthesis.cancel();
@@ -197,7 +199,7 @@ export default function BookReader({ bookId, onClose }: BookReaderProps) {
             });
         }, 1000);
         return () => clearInterval(interval);
-    }, [sleepTimer, audio.isPlaying, audio.setIsPlaying, showToast]);
+    }, [sleepTimer, isPlaying, setIsPlaying, showToast]);
 
     const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
         const currentScrollY = e.currentTarget.scrollTop;
@@ -244,7 +246,7 @@ export default function BookReader({ bookId, onClose }: BookReaderProps) {
             setBookmarks(prev => [enriched as Bookmark, ...prev]);
             setEditingBookmark(null);
             showToast('Đã lưu dấu trang!', 'success');
-        } catch (e) {
+        } catch {
             showToast('Lỗi khi lưu dấu trang', 'error');
         }
     };

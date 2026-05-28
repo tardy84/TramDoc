@@ -3,10 +3,10 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { PrismaClient } from '@prisma/client';
 import { authenticateJWT, AuthRequest } from '../middleware/auth.js';
+import { JWT_SECRET } from '../config/env.js';
 
 const router = Router();
 const prisma = new PrismaClient();
-const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-change-me';
 
 // Login (Strictly using .env configurations)
 router.post('/login', async (req, res) => {
@@ -26,7 +26,7 @@ router.post('/login', async (req, res) => {
             });
 
             const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '30d' });
-            return res.json({ token, user: { id: user.id, username: user.email, name: user.name, role: user.role } });
+            return res.json({ token, user: { id: user.id, email: user.email, username: user.email, name: user.name, role: user.role } });
         }
 
         return res.status(400).json({ error: 'Tên đăng nhập hoặc mật khẩu không chính xác' });

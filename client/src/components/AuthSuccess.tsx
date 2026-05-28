@@ -8,7 +8,7 @@ export default function AuthSuccess() {
     useEffect(() => {
         const token = searchParams.get('token');
         if (token) {
-            localStorage.setItem('audiobook_token', token);
+            localStorage.setItem('token', token);
             // We could also fetch user info here or let App.tsx do it
             window.location.href = '/'; // Refresh to trigger App.tsx load
         } else {

@@ -1,18 +1,18 @@
 import React from 'react';
-import { Book, ThemeMode } from './types';
+import { Book, ThemeMode, ThemeStyles, Segment } from './types';
 
 interface ReaderHeaderProps {
     book: Book | null;
     showControls: boolean;
     theme: ThemeMode;
-    currentThemeStyles: any;
+    currentThemeStyles: ThemeStyles;
     showLibrary: boolean;
     setShowLibrary: (show: boolean) => void;
     setShowSettings: (show: boolean) => void;
     handleClose: () => void;
-    currentSegment: any;
+    currentSegment?: Segment;
     isBookmarked: boolean;
-    toggleBookmark: (segment: any) => void;
+    toggleBookmark: (segment: Segment) => void;
 }
 
 const ReaderHeader: React.FC<ReaderHeaderProps> = ({
@@ -49,7 +49,7 @@ const ReaderHeader: React.FC<ReaderHeaderProps> = ({
 
                     <div className="flex gap-3">
                         <button
-                            onClick={() => toggleBookmark(currentSegment)}
+                            onClick={() => currentSegment && toggleBookmark(currentSegment)}
                             className={`flex items-center justify-center w-10 h-10 rounded-full transition-all ${isBookmarked ? 'bg-yellow-500 text-white shadow-lg shadow-yellow-500/20' : currentThemeStyles.btn}`}
                             title={isBookmarked ? 'Xóa dấu trang' : 'Lưu dấu trang'}
                         >

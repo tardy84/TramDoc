@@ -3,7 +3,8 @@ export type ThemeMode = 'midnight' | 'sepia' | 'emerald' | 'oled' | 'dark';
 export interface User {
     id: number;
     email: string;
-    name: string;
+    username?: string;
+    name?: string;
     avatarUrl?: string;
     role: string;
 }
@@ -33,6 +34,47 @@ export interface Book {
     lastRead?: number;
     chapters: Chapter[];
     currentText?: string;
+}
+
+export interface ThemeStyles {
+    container: string;
+    text: string;
+    card: string;
+    active: string;
+    header: string;
+    btn: string;
+    backBtn: string;
+    paper: string;
+}
+
+export interface AdminBook extends Book {
+    user?: {
+        name?: string | null;
+        email?: string | null;
+    };
+    _count?: {
+        chapters?: number;
+    };
+}
+
+export interface AdminUser extends User {
+    books: AdminBook[];
+    _count: {
+        books: number;
+    };
+    createdAt: string;
+}
+
+export interface RecentUser extends User {
+    createdAt: string;
+}
+
+export interface AdminStats {
+    userCount: number;
+    bookCount: number;
+    chapterCount: number;
+    segmentCount: number;
+    recentUsers: RecentUser[];
 }
 
 export interface Bookmark {

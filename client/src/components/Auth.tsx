@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 import { API_BASE_URL } from '../constants';
+import { User } from '../types';
+import { getErrorMessage } from '../utils/errors';
 
 interface AuthProps {
-    onLogin: (token: string, user: any) => void;
+    onLogin: (token: string, user: User) => void;
 }
 
 export default function Auth({ onLogin }: AuthProps) {
@@ -23,8 +25,8 @@ export default function Auth({ onLogin }: AuthProps) {
                 password
             });
             onLogin(res.data.token, res.data.user);
-        } catch (err: any) {
-            setError(err.response?.data?.error || 'Sai thông tin đăng nhập');
+        } catch (err) {
+            setError(getErrorMessage(err, 'Sai thông tin đăng nhập'));
         } finally {
             setLoading(false);
         }

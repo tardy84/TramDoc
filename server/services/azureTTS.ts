@@ -3,6 +3,15 @@ import axios from 'axios';
 const AZURE_SPEECH_KEY = process.env.AZURE_SPEECH_KEY;
 const AZURE_SPEECH_REGION = process.env.AZURE_SPEECH_REGION;
 
+function escapeSsml(text: string): string {
+    return text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&apos;');
+}
+
 export class AzureTTSService {
     async synthesize(
         text: string,
@@ -27,11 +36,12 @@ export class AzureTTSService {
         console.log(`[AzureTTS] Synthesizing with voice: ${voiceName}`);
 
         try {
+            const safeText = escapeSsml(text);
             const response = await axios.post(
                 AZURE_API_URL,
                 `<speak version='1.0' xml:lang='vi-VN'>
                     <voice xml:lang='vi-VN' xml:gender='${role === 'male' ? 'Male' : 'Female'}' name='${voiceName}'>
-                        ${text}
+                        ${safeText}
                     </voice>
                 </speak>`,
                 {

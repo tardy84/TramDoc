@@ -1,6 +1,7 @@
 import { openDB, DBSchema, IDBPDatabase } from 'idb';
 import axios from 'axios';
 import { API_BASE_URL } from '../constants';
+import { Book, Chapter } from '../types';
 
 interface OfflineBook extends DBSchema {
     books: {
@@ -10,7 +11,7 @@ interface OfflineBook extends DBSchema {
             title: string;
             author?: string;
             coverImageUrl?: string;
-            chapters: any[];
+            chapters: Chapter[];
             downloadedAt: number;
             cover?: Blob; // Store actual image data
         };
@@ -41,7 +42,7 @@ export const initDB = () => {
     return dbPromise;
 };
 
-export const saveBookOffline = async (book: any) => {
+export const saveBookOffline = async (book: Book) => {
     const db = await initDB();
 
     // Download cover image if exists

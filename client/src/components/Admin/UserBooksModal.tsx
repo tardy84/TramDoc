@@ -1,10 +1,11 @@
 import React from 'react';
 import ConfirmModal from '../Shared/ConfirmModal';
+import { AdminBook } from '../../types';
 
 interface UserBooksModalProps {
     isOpen: boolean;
     userName: string;
-    books: any[];
+    books: AdminBook[];
     onClose: () => void;
     onDeleteBook: (id: number) => Promise<void>;
     onBulkDelete: (ids: number[]) => Promise<void>;

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import ConfirmModal from './components/Shared/ConfirmModal';
 import BookReader from './components/BookReader';
@@ -7,8 +7,9 @@ import InfoModal from './components/Reader/InfoModal';
 import Auth from './components/Auth';
 import BookCard from './components/Library/BookCard';
 import HeroCarousel from './components/Library/HeroCarousel';
-import { Book } from './types';
+import { Book, User } from './types';
 import { getAllBooks, deleteBook as deleteBookApi, uploadBook, getUploadStatus } from './services/apiService';
+import { getErrorMessage } from './utils/errors';
 
 function MainApp({
     books,
@@ -74,17 +75,17 @@ function MainApp({
                         clearInterval(pollInterval);
                         throw new Error(status.error);
                     }
-                } catch (err: any) {
+                } catch (err) {
                     clearInterval(pollInterval);
                     setUploadStatus('Lỗi');
-                    showToast(err.message || 'Lỗi xử lý EPUB', 'error');
+                    showToast(getErrorMessage(err, 'Lỗi xử lý EPUB'), 'error');
                     setUploading(false);
                 }
             }, 1000);
 
-        } catch (error: any) {
+        } catch (error) {
             setUploadStatus('Lỗi');
-            showToast(error.message || 'Lỗi tải sách', 'error');
+            showToast(getErrorMessage(error, 'Lỗi tải sách'), 'error');
             setUploading(false);
         }
     };
@@ -95,8 +96,8 @@ function MainApp({
             await deleteBookApi(deleteConfirm.bookId);
             showToast(`Sách "${deleteConfirm.title}" đã được xóa!`);
             await loadBooks();
-        } catch (error: any) {
-            showToast(`Lỗi: ${error.message}`, 'error');
+        } catch (error) {
+            showToast(`Lỗi: ${getErrorMessage(error, 'Không thể xóa sách')}`, 'error');
         } finally {
             setDeleteConfirm(null);
         }
@@ -246,7 +247,7 @@ function MainApp({
                                 <div className="relative">
                                     <select
                                         value={sortBy}
-                                        onChange={(e) => setSortBy(e.target.value as any)}
+                                        onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
                                         className="appearance-none bg-slate-800/80 text-white text-[10px] font-black uppercase px-3 py-2 pr-8 rounded-xl border border-white/5"
                                     >
                                         <option value="recent">Mới</option>
@@ -350,7 +351,7 @@ function App() {
     const [books, setBooks] = useState<Book[]>([]);
     const [loading, setLoading] = useState(true);
 
-    const loadBooks = async () => {
+    const loadBooks = useCallback(async () => {
         if (!token) return;
         try {
             const serverBooks = await getAllBooks();
@@ -358,7 +359,7 @@ function App() {
         } catch (error) {
             console.error('Failed to load books:', error);
         }
-    };
+    }, [token]);
 
     useEffect(() => {
         const init = async () => {
@@ -370,9 +371,9 @@ function App() {
         } else {
             setLoading(false);
         }
-    }, [token]);
+    }, [token, loadBooks]);
 
-    const handleLogin = (newToken: string, user: any) => {
+    const handleLogin = (newToken: string, user: User) => {
         localStorage.setItem('token', newToken);
         localStorage.setItem('user', JSON.stringify(user));
         setToken(newToken);
@@ -392,6 +393,7 @@ function App() {
                         loading={loading}
                         onLogout={() => {
                             localStorage.removeItem('token');
+                            localStorage.removeItem('audiobook_token');
                             localStorage.removeItem('user');
                             setToken(null);
                         }}

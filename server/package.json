@@ -5,7 +5,11 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "prisma:generate": "prisma generate",
+    "prisma:validate": "DATABASE_URL=${DATABASE_URL:-file:./prisma/dev.db} prisma validate",
+    "test": "npm run typecheck && npm run prisma:validate",
     "dev": "tsx watch index.ts"
   },
   "keywords": [],

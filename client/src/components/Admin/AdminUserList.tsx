@@ -1,20 +1,23 @@
 import React from 'react';
+import { AxiosInstance } from 'axios';
 import ConfirmModal from '../Shared/ConfirmModal';
+import { AdminBook, AdminUser } from '../../types';
+import { getErrorMessage } from '../../utils/errors';
 import UserBooksModal from './UserBooksModal';
 
 interface AdminUserListProps {
-    users: any[];
+    users: AdminUser[];
     searchQuery: string;
     setSearchQuery: (q: string) => void;
     onDeleteUser: (id: number) => Promise<void>;
     onDeleteBook: (id: number) => Promise<void>;
     onBulkDelete: (ids: number[]) => Promise<void>;
-    authAxios: any;
+    authAxios: AxiosInstance;
     refreshData: () => void;
 }
 
 const AdminUserList: React.FC<AdminUserListProps> = ({ users, searchQuery, setSearchQuery, onDeleteUser, onDeleteBook, onBulkDelete, authAxios, refreshData }) => {
-    const [selectedUserBooks, setSelectedUserBooks] = React.useState<{ name: string, books: any[] } | null>(null);
+    const [selectedUserBooks, setSelectedUserBooks] = React.useState<{ name: string, books: AdminBook[] } | null>(null);
     const [confirmDelete, setConfirmDelete] = React.useState<number | null>(null);
     const [resetPasswordFor, setResetPasswordFor] = React.useState<number | null>(null);
 
@@ -31,8 +34,8 @@ const AdminUserList: React.FC<AdminUserListProps> = ({ users, searchQuery, setSe
             await authAxios.patch(`/api/admin/users/${resetPasswordFor}/password`, { newPassword });
             alert('Reset mật khẩu thành công');
             refreshData();
-        } catch (error: any) {
-            alert(error.response?.data?.error || 'Lỗi khi reset mật khẩu');
+        } catch (error) {
+            alert(getErrorMessage(error, 'Lỗi khi reset mật khẩu'));
         } finally {
             setResetPasswordFor(null);
         }
@@ -70,7 +73,7 @@ const AdminUserList: React.FC<AdminUserListProps> = ({ users, searchQuery, setSe
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-white/5">
-                        {filteredUsers.map((u: any) => (
+                        {filteredUsers.map((u) => (
                             <tr key={u.id} className="hover:bg-white/[0.02] transition-all group">
                                 <td className="px-8 py-4">
                                     <div className="flex items-center gap-3">

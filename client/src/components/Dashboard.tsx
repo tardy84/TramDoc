@@ -1,6 +1,6 @@
-import { } from 'react';
 import { Chart as ChartJS, ArcElement, Tooltip, Legend } from 'chart.js';
 import { Doughnut } from 'react-chartjs-2';
+import { Book, User } from '../types';
 
 
 ChartJS.register(ArcElement, Tooltip, Legend);
@@ -37,8 +37,8 @@ function StatCard({ title, value, subtext, icon, trend, color = 'emerald' }: Sta
 }
 
 interface DashboardProps {
-    books: any[];
-    user: any;
+    books: Book[];
+    user: User;
     onClose: () => void;
 }
 

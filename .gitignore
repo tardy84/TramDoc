@@ -2,6 +2,8 @@ node_modules/
 dist/
 .env
 .env.*
+!.env.example
+!**/.env.example
 *.log
 .DS_Store
 Thumbs.db
@@ -9,3 +11,5 @@ Thumbs.db
 *.wav
 audio/
 Audiobook_Stable_Backup.zip
+
+.codex/

@@ -1,15 +1,8 @@
 import React from 'react';
-
-interface Stat {
-    userCount: number;
-    bookCount: number;
-    chapterCount: number;
-    segmentCount: number;
-    recentUsers: any[];
-}
+import { AdminStats } from '../../types';
 
 interface AdminOverviewProps {
-    stats: Stat;
+    stats: AdminStats;
 }
 
 function StatCard({ label, value, color, icon }: { label: string, value: number, color: string, icon: string }) {
@@ -42,7 +35,7 @@ const AdminOverview: React.FC<AdminOverviewProps> = ({ stats }) => {
             <div className="bg-white/5 rounded-[32px] p-8 border border-white/5">
                 <h3 className="text-xl font-bold text-white mb-6">Hoạt động gần đây</h3>
                 <div className="space-y-4">
-                    {stats.recentUsers.map((u: any) => (
+                    {stats.recentUsers.map((u) => (
                         <div key={u.id} className="flex items-center justify-between p-4 bg-white/5 rounded-2xl border border-white/5 hover:bg-white/[0.08] transition-all">
                             <div className="flex items-center gap-4">
                                 <div className="w-12 h-12 rounded-full bg-indigo-500/20 flex items-center justify-center text-xl">

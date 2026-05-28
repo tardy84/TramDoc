@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { PrismaClient } from '@prisma/client';
 import path from 'path';
 import multer from 'multer';
@@ -11,7 +11,30 @@ const prisma = new PrismaClient();
 const epubProcessor = new EpubProcessor();
 
 // Upload configuration
-const upload = multer({ dest: 'uploads/' });
+const MAX_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024;
+const upload = multer({
+    dest: 'uploads/',
+    limits: { fileSize: MAX_UPLOAD_SIZE_BYTES },
+    fileFilter: (_req, file, cb) => {
+        if (path.extname(file.originalname).toLowerCase() !== '.epub') {
+            return cb(new Error('Chỉ hỗ trợ file EPUB'));
+        }
+        cb(null, true);
+    }
+});
+
+const uploadBook = upload.single('book');
+const handleBookUpload = (req: Request, res: Response, next: NextFunction) => {
+    uploadBook(req, res, (error: any) => {
+        if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
+            return res.status(400).json({ error: 'File EPUB quá lớn. Vui lòng chọn file tối đa 50MB.' });
+        }
+        if (error) {
+            return res.status(400).json({ error: error.message || 'Upload failed' });
+        }
+        next();
+    });
+};
 
 // Simple in-memory store for upload progress
 interface UploadJob {
@@ -22,14 +45,16 @@ interface UploadJob {
 export const uploadJobs: Record<string, UploadJob> = {};
 
 // EPUB upload and processing
-router.post('/upload', authenticateJWT, upload.single('book'), async (req: AuthRequest, res: Response) => {
+router.post('/upload', authenticateJWT, handleBookUpload, async (req: AuthRequest, res: Response) => {
     const jobId = req.body.jobId as string;
     const userId = req.user.id;
+    let tempFilePath: string | undefined;
 
     try {
         if (!req.file) {
             return res.status(400).json({ error: 'No file uploaded' });
         }
+        tempFilePath = req.file.path;
 
         if (jobId) {
             uploadJobs[jobId] = { progress: 0, status: 'Starting processing...' };
@@ -59,11 +84,15 @@ router.post('/upload', authenticateJWT, upload.single('book'), async (req: AuthR
             uploadJobs[jobId] = { progress: 0, status: 'Error', error: error.message };
         }
         res.status(500).json({ error: error.message });
+    } finally {
+        if (tempFilePath) {
+            fs.unlink(tempFilePath).catch(() => { });
+        }
     }
 });
 
 // Get upload status
-router.get('/upload-status/:jobId', (req: Request, res: Response) => {
+router.get('/upload-status/:jobId', authenticateJWT, (req: Request, res: Response) => {
     const jobId = req.params.jobId as string;
     const job = uploadJobs[jobId];
 
@@ -84,7 +113,7 @@ router.get('/books', authenticateJWT, async (req: AuthRequest, res: Response) =>
         where: { userId: req.user.id },
         include: {
             chapters: { include: { segments: true }, orderBy: { orderIndex: 'asc' } },
-            userProgress: true
+            userProgress: { where: { userId: req.user.id } }
         }
     });
 
@@ -181,9 +210,17 @@ router.delete('/books/:id', authenticateJWT, async (req: AuthRequest, res: Respo
 
 router.post('/progress/:bookId', authenticateJWT, async (req: AuthRequest, res: Response) => {
     try {
-        const bookId = parseInt(req.params.bookId as string);
+        const bookId = parseInt(req.params.bookId as string, 10);
         const userId = req.user.id;
         const { chapterIndex, segmentIndex } = req.body;
+
+        if (!Number.isInteger(bookId) || !Number.isInteger(chapterIndex) || !Number.isInteger(segmentIndex) || chapterIndex < 0 || segmentIndex < 0) {
+            return res.status(400).json({ error: 'Dữ liệu tiến độ không hợp lệ' });
+        }
+
+        const book = await prisma.book.findFirst({ where: { id: bookId, userId }, select: { id: true } });
+        if (!book) return res.status(404).json({ error: 'Book not found' });
+
         const progress = await prisma.userProgress.upsert({
             where: { userId_bookId: { userId, bookId } },
             update: { chapterIndex, segmentIndex },
@@ -198,8 +235,16 @@ router.post('/progress/:bookId', authenticateJWT, async (req: AuthRequest, res: 
 router.get('/progress/:bookId', authenticateJWT, async (req: AuthRequest, res: Response) => {
     try {
         const userId = req.user.id;
+        const bookId = parseInt(req.params.bookId as string, 10);
+        if (!Number.isInteger(bookId)) {
+            return res.status(400).json({ error: 'Book ID không hợp lệ' });
+        }
+
+        const book = await prisma.book.findFirst({ where: { id: bookId, userId }, select: { id: true } });
+        if (!book) return res.status(404).json({ error: 'Book not found' });
+
         const progress = await prisma.userProgress.findUnique({
-            where: { userId_bookId: { userId, bookId: parseInt(req.params.bookId) } }
+            where: { userId_bookId: { userId, bookId } }
         });
         res.json(progress || { chapterIndex: 0, segmentIndex: 0 });
     } catch (error: any) {
@@ -224,10 +269,28 @@ router.get('/books/:bookId/bookmarks', authenticateJWT, async (req: AuthRequest,
 
 router.post('/bookmarks', authenticateJWT, async (req: AuthRequest, res: Response) => {
     try {
-        const { bookId, chapterId, segmentId, previewText, note } = req.body;
+        const bookId = parseInt(req.body.bookId, 10);
+        const chapterId = parseInt(req.body.chapterId, 10);
+        const segmentId = parseInt(req.body.segmentId, 10);
+        const { previewText, note } = req.body;
+
+        if (!Number.isInteger(bookId) || !Number.isInteger(chapterId) || !Number.isInteger(segmentId) || !previewText) {
+            return res.status(400).json({ error: 'Dữ liệu bookmark không hợp lệ' });
+        }
+
+        const segment = await prisma.textSegment.findFirst({
+            where: {
+                id: segmentId,
+                chapterId,
+                chapter: { bookId, book: { userId: req.user.id } }
+            },
+            select: { id: true }
+        });
+
+        if (!segment) return res.status(404).json({ error: 'Segment not found' });
 
         const bookmark = await prisma.bookmark.create({
-            data: { bookId: parseInt(bookId), chapterId: parseInt(chapterId), segmentId: parseInt(segmentId), previewText, note }
+            data: { bookId, chapterId, segmentId, previewText, note }
         });
         res.json(bookmark);
     } catch (error: any) {
@@ -238,7 +301,18 @@ router.post('/bookmarks', authenticateJWT, async (req: AuthRequest, res: Respons
 // Delete a bookmark
 router.delete('/bookmarks/:id', authenticateJWT, async (req: AuthRequest, res: Response) => {
     try {
-        const id = parseInt(req.params.id as string);
+        const id = parseInt(req.params.id as string, 10);
+        if (!Number.isInteger(id)) {
+            return res.status(400).json({ error: 'Bookmark ID không hợp lệ' });
+        }
+
+        const bookmark = await prisma.bookmark.findFirst({
+            where: { id, chapter: { book: { userId: req.user.id } } },
+            select: { id: true }
+        });
+
+        if (!bookmark) return res.status(404).json({ error: 'Bookmark not found' });
+
         await prisma.bookmark.delete({ where: { id } });
         res.json({ success: true });
     } catch (error: any) {

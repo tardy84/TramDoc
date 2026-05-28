@@ -1,21 +1,14 @@
 import express from 'express';
 import type { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
-import fs from 'fs';
 import path from 'path';
 import { PrismaClient } from '@prisma/client';
-import dotenv from 'dotenv';
 
 // Import New Routers
 import authRouter from './routes/auth.js';
 import adminRouter from './routes/admin.js';
 import booksRouter from './routes/books.js';
 import ttsRouter from './routes/tts.js';
-
-// Load env from absolute path when present, otherwise rely on injected environment
-const envPath = path.resolve(process.cwd(), '.env');
-const hasEnvFile = fs.existsSync(envPath);
-const result = hasEnvFile ? dotenv.config({ path: envPath }) : { parsed: undefined, error: undefined };
 
 const app = express();
 // Priority: 1. Env Var, 2. Relative fallback
@@ -34,15 +27,7 @@ const port = process.env.PORT || 3005;
 
 console.log('--- Server Startup ---');
 console.log('CWD:', process.cwd());
-console.log('Env Path tried:', envPath);
-if (result.error) {
-    console.error('Dotenv Error:', result.error.message);
-} else if (hasEnvFile) {
-    console.log('.env loaded. Keys:', Object.keys(result.parsed || {}).join(', '));
-} else {
-    console.log('.env not present, using injected environment variables');
-}
-console.log('DATABASE_URL acting:', databaseUrl);
+console.log('DATABASE_URL configured:', Boolean(databaseUrl));
 console.log('---------------------');
 
 // --- GLOBALS & IDENTITY ---

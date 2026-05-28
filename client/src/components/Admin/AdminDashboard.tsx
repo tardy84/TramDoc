@@ -1,36 +1,30 @@
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
 import { API_BASE_URL } from '../../constants';
 import { deleteOfflineBook } from '../../services/offlineManager';
+import { AdminBook, AdminStats, AdminUser } from '../../types';
+import { getErrorMessage } from '../../utils/errors';
 import AdminOverview from './AdminOverview';
 import AdminUserList from './AdminUserList';
 import AdminBookList from './AdminBookList';
 
-interface AdminStats {
-    userCount: number;
-    bookCount: number;
-    chapterCount: number;
-    segmentCount: number;
-    recentUsers: any[];
-}
-
 export default function AdminDashboard({ onClose }: { onClose?: () => void }) {
     const navigate = useNavigate();
     const [stats, setStats] = useState<AdminStats | null>(null);
-    const [users, setUsers] = useState<any[]>([]);
-    const [books, setBooks] = useState<any[]>([]);
+    const [users, setUsers] = useState<AdminUser[]>([]);
+    const [books, setBooks] = useState<AdminBook[]>([]);
     const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'books'>('overview');
     const [loading, setLoading] = useState(true);
     const [searchQuery, setSearchQuery] = useState('');
 
-    const token = localStorage.getItem('audiobook_token');
-    const authAxios = axios.create({
+    const token = localStorage.getItem('token');
+    const authAxios = useMemo(() => axios.create({
         baseURL: API_BASE_URL,
         headers: { Authorization: `Bearer ${token}` }
-    });
+    }), [token]);
 
-    const fetchData = async () => {
+    const fetchData = useCallback(async () => {
         setLoading(true);
         try {
             const [statsRes, usersRes, booksRes] = await Promise.all([
@@ -46,18 +40,18 @@ export default function AdminDashboard({ onClose }: { onClose?: () => void }) {
         } finally {
             setLoading(false);
         }
-    };
+    }, [authAxios]);
 
     useEffect(() => {
         fetchData();
-    }, []);
+    }, [fetchData]);
 
     const handleDeleteUser = async (id: number) => {
         try {
             await authAxios.delete(`/api/admin/users/${id}`);
             fetchData();
-        } catch (error: any) {
-            alert(error.response?.data?.error || 'Lỗi khi xóa người dùng');
+        } catch (error) {
+            alert(getErrorMessage(error, 'Lỗi khi xóa người dùng'));
         }
     };
     const handleDeleteBook = async (id: number) => {
@@ -65,8 +59,8 @@ export default function AdminDashboard({ onClose }: { onClose?: () => void }) {
             await authAxios.delete(`/api/admin/books/${id}`);
             await deleteOfflineBook(id);
             fetchData();
-        } catch (error: any) {
-            alert(error.response?.data?.error || 'Lỗi khi xóa sách');
+        } catch (error) {
+            alert(getErrorMessage(error, 'Lỗi khi xóa sách'));
         }
     };
 
@@ -76,8 +70,8 @@ export default function AdminDashboard({ onClose }: { onClose?: () => void }) {
             // Clean up offline data for all deleted books
             await Promise.all(ids.map(id => deleteOfflineBook(id)));
             fetchData();
-        } catch (error: any) {
-            alert(error.response?.data?.error || 'Lỗi khi xóa hàng loạt');
+        } catch (error) {
+            alert(getErrorMessage(error, 'Lỗi khi xóa hàng loạt'));
         }
     };
 
@@ -106,14 +100,14 @@ export default function AdminDashboard({ onClose }: { onClose?: () => void }) {
                     </div>
 
                     <nav className="hidden md:flex bg-white/5 p-1 rounded-2xl border border-white/5 backdrop-blur-md">
-                        {[
+                        {([
                             { id: 'overview', label: 'Tổng quan', icon: '📊' },
                             { id: 'users', label: 'Người dùng', icon: '👥' },
                             { id: 'books', label: 'Kho sách', icon: '📚' }
-                        ].map(tab => (
+                        ] as Array<{ id: typeof activeTab; label: string; icon: string }>).map(tab => (
                             <button
                                 key={tab.id}
-                                onClick={() => setActiveTab(tab.id as any)}
+                                onClick={() => setActiveTab(tab.id)}
                                 className={`px-6 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-2 ${activeTab === tab.id ? 'bg-white/10 text-white shadow-inner' : 'text-white/40 hover:text-white/60'}`}
                             >
                                 <span>{tab.icon}</span>
@@ -134,10 +128,10 @@ export default function AdminDashboard({ onClose }: { onClose?: () => void }) {
                 {/* Sub-header for Mobile */}
                 <div className="md:hidden px-8 py-4 border-b border-white/5 overflow-x-auto">
                     <div className="flex gap-2">
-                        {['overview', 'users', 'books'].map(tab => (
+                        {(['overview', 'users', 'books'] as Array<typeof activeTab>).map(tab => (
                             <button
                                 key={tab}
-                                onClick={() => setActiveTab(tab as any)}
+                                onClick={() => setActiveTab(tab)}
                                 className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap ${activeTab === tab ? 'bg-white/10 text-white' : 'text-white/40'}`}
                             >
                                 {tab.toUpperCase()}
@@ -207,4 +201,3 @@ export default function AdminDashboard({ onClose }: { onClose?: () => void }) {
         </div>
     );
 }
-

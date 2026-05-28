@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { Chapter } from './types';
 import { synthesize, hasApiKeys } from '../../services/ttsService';
+import { isAbortError } from '../../utils/errors';
 
 
 interface UseReaderAudioProps {
@@ -38,7 +39,7 @@ export const useReaderAudio = ({
     const audioRef = useRef<HTMLAudioElement | null>(null);
     const preloadAudioRef = useRef<HTMLAudioElement | null>(null);
     const nextAudioIndexRef = useRef<number | null>(null);
-    const preloadTimeoutRef = useRef<any>(null);
+    const preloadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const abortControllerRef = useRef<AbortController | null>(null);
     const activeChapterIdRef = useRef<number | null>(null);
     const queuedIndicesRef = useRef<Set<number>>(new Set());
@@ -90,7 +91,7 @@ export const useReaderAudio = ({
 
         queuedIndicesRef.current.add(index);
         window.speechSynthesis.speak(utterance);
-    }, [chapters, currentChapterIndex, playbackSpeed, nextChapter, setCurrentSegmentIndex]);
+    }, [chapters, currentChapterIndex, playbackSpeed, nextChapter, setCurrentSegmentIndex, getGlobalAudio, setGlobalAudio]);
 
     const playAudio = useCallback(async (index: number, _files: string[] = audioFiles, retryCount = 0, incomingPlayId?: number) => {
         const chapterIdx = currentChapterIndex;
@@ -248,7 +249,7 @@ export const useReaderAudio = ({
             preloadNext(index + 1);
         }
 
-    }, [audioFiles, chapters, currentChapterIndex, nextChapter, playbackSpeed, bookId, selectedVoice, playBrowserTTS, setCurrentSegmentIndex, getGlobalAudio, setGlobalAudio]);
+    }, [audioFiles, chapters, currentChapterIndex, nextChapter, playbackSpeed, playBrowserTTS, setCurrentSegmentIndex, getGlobalAudio, setGlobalAudio]);
 
     // Returns true for voices that require client-side API keys (Azure, MiniMax, Gemini)
     const isClientSideVoice = useCallback((voice: string): boolean => {
@@ -333,16 +334,16 @@ export const useReaderAudio = ({
                         blobUrls.push(url);
                         blobUrlMap.set(i, url);
                         activeUrlMapRef.current.set(i, url);
-                    } catch (err: any) {
-                        if (err.name !== 'AbortError') {
+                    } catch (err) {
+                        if (!isAbortError(err)) {
                             console.error('[ClientTTS] Failed segment', i, err);
                         }
                     }
                 }
             })();
 
-        } catch (error: any) {
-            if (error.name === 'AbortError' || controller.signal.aborted) return;
+        } catch (error) {
+            if (isAbortError(error) || controller.signal.aborted) return;
             console.error('[ClientTTS] Error:', error);
             setGenerating(false);
             setBrowserTTSMode(true);
@@ -353,7 +354,7 @@ export const useReaderAudio = ({
                 abortControllerRef.current = null;
             }
         }
-    }, [bookId, chapters, currentChapterIndex, currentSegmentIndex, playAudio, playBrowserTTS, setChapters, selectedVoice, getGlobalAudio, setGlobalAudio, hasApiKeys]);
+    }, [chapters, currentChapterIndex, currentSegmentIndex, playAudio, playBrowserTTS, setChapters, selectedVoice, getGlobalAudio, setGlobalAudio]);
 
     const generateAudio = useCallback(async (startFromIndex?: number) => {
         if (chapters.length === 0) return;
@@ -391,9 +392,11 @@ export const useReaderAudio = ({
             // /audio/:filename automatically catches 404s, generates them on-the-fly,
             // and asynchronously triggers lookahead for the next 3 segments! No need to wait.
             const timestamp = Date.now();
+            const token = localStorage.getItem('token');
+            const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
             const urls = Array.from(
                 { length: chapter.segments.length },
-                (_, i) => `/audio/${bookId}_${chapter.id}_${selectedVoice}_${i}.mp3?t=${timestamp}`
+                (_, i) => `/audio/${bookId}_${chapter.id}_${selectedVoice}_${i}.mp3?t=${timestamp}${tokenParam}`
             );
 
             if (controller.signal.aborted || activeChapterIdRef.current !== chapter.id) return;
@@ -410,8 +413,8 @@ export const useReaderAudio = ({
             const targetIndex = typeof startFromIndex === 'number' ? startFromIndex : currentSegmentIndex;
             playAudio(targetIndex, urls);
 
-        } catch (error: any) {
-            if (error.name === 'AbortError' || controller.signal.aborted) return;
+        } catch (error) {
+            if (isAbortError(error) || controller.signal.aborted) return;
             console.error('[TTS] Server API Error:', error);
             setBrowserTTSMode(true);
             setGenerating(false);

@@ -62,7 +62,7 @@ router.get('/books', authenticateAdmin, async (req: AuthRequest, res: Response) 
 
 router.delete('/users/:id', authenticateAdmin, async (req: AuthRequest, res: Response) => {
     try {
-        const id = parseInt(req.params.id);
+        const id = parseInt(req.params.id as string, 10);
         if (id === req.user?.id) {
             return res.status(400).json({ error: 'Cannot delete yourself' });
         }
@@ -75,7 +75,7 @@ router.delete('/users/:id', authenticateAdmin, async (req: AuthRequest, res: Res
 
 router.patch('/users/:id/password', authenticateAdmin, async (req: AuthRequest, res: Response) => {
     try {
-        const id = parseInt(req.params.id);
+        const id = parseInt(req.params.id as string, 10);
         const { newPassword } = req.body;
 
         const passwordHash = await bcrypt.hash(newPassword, 10);
@@ -92,7 +92,7 @@ router.patch('/users/:id/password', authenticateAdmin, async (req: AuthRequest, 
 
 router.delete('/books/:id', authenticateAdmin, async (req: AuthRequest, res: Response) => {
     try {
-        const id = parseInt(req.params.id);
+        const id = parseInt(req.params.id as string, 10);
         const book = await prisma.book.findUnique({ where: { id } });
         if (!book) return res.status(404).json({ error: 'Book not found' });
 

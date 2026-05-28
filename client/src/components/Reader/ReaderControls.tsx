@@ -1,5 +1,5 @@
 import React from 'react';
-import { ThemeMode, Chapter } from './types';
+import { ThemeMode, ThemeStyles, Chapter } from './types';
 
 interface ReaderControlsProps {
     showControls: boolean;
@@ -19,7 +19,7 @@ interface ReaderControlsProps {
     toggleSpeed: () => void;
     setShowSettings: (show: boolean) => void;
     showSettings: boolean;
-    currentThemeStyles: any;
+    currentThemeStyles: ThemeStyles;
 }
 
 const ReaderControls: React.FC<ReaderControlsProps> = ({

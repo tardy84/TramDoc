@@ -1,9 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { PrismaClient } from '@prisma/client';
+import { JWT_SECRET } from '../config/env.js';
 
 const prisma = new PrismaClient();
-const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-change-me';
 
 export interface AuthRequest extends Request {
     user?: any;
@@ -16,7 +16,6 @@ export const authenticateJWT = (req: AuthRequest, res: Response, next: NextFunct
         jwt.verify(token, JWT_SECRET, (err: any, user: any) => {
             if (err) {
                 console.error(`[Auth] JWT Error: ${err.message} (${req.method} ${req.originalUrl})`);
-                console.error(`[Auth] Header: ${authHeader}`);
                 return res.sendStatus(403);
             }
             req.user = user;

@@ -144,6 +144,7 @@ export class EpubProcessor {
         const fileName = `cover_${Date.now()}${ext}`;
         const savePath = path.join('uploads', 'covers', fileName);
 
+        await fs.mkdir(path.dirname(savePath), { recursive: true });
         await fs.writeFile(savePath, coverEntry.getData());
         return savePath;
     }
