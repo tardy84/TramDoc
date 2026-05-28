@@ -9,40 +9,69 @@ export interface AuthRequest extends Request {
     user?: any;
 }
 
-export const authenticateJWT = (req: AuthRequest, res: Response, next: NextFunction) => {
+interface JwtUserPayload {
+    id: number;
+    email?: string;
+}
+
+function getBearerToken(req: Request): string | null {
     const authHeader = req.headers.authorization;
-    if (authHeader) {
-        const token = authHeader.split(' ')[1];
-        jwt.verify(token, JWT_SECRET, (err: any, user: any) => {
-            if (err) {
-                console.error(`[Auth] JWT Error: ${err.message} (${req.method} ${req.originalUrl})`);
-                return res.sendStatus(403);
-            }
-            req.user = user;
-            console.log(`[Auth] User authenticated: ${user.email} (${user.id})`);
-            next();
-        });
-    } else {
+    if (!authHeader?.startsWith('Bearer ')) return null;
+
+    const token = authHeader.slice('Bearer '.length).trim();
+    return token.length > 0 ? token : null;
+}
+
+function isJwtUserPayload(value: unknown): value is JwtUserPayload {
+    return typeof value === 'object' &&
+        value !== null &&
+        Number.isInteger((value as JwtUserPayload).id);
+}
+
+export const authenticateJWT = (req: AuthRequest, res: Response, next: NextFunction) => {
+    const token = getBearerToken(req);
+    if (!token) {
         console.warn('[Auth] No Authorization header provided');
-        res.sendStatus(401);
+        return res.sendStatus(401);
+    }
+
+    try {
+        const user = jwt.verify(token, JWT_SECRET);
+        if (!isJwtUserPayload(user)) {
+            return res.sendStatus(403);
+        }
+
+        req.user = user;
+        return next();
+    } catch (err: any) {
+        console.error(`[Auth] JWT Error: ${err.message} (${req.method} ${req.originalUrl})`);
+        return res.sendStatus(403);
     }
 };
 
-export const authenticateAdmin = (req: AuthRequest, res: Response, next: NextFunction) => {
-    const authHeader = req.headers.authorization;
-    if (authHeader) {
-        const token = authHeader.split(' ')[1];
-        jwt.verify(token, JWT_SECRET, async (err: any, decoded: any) => {
-            if (err) return res.sendStatus(403);
-            const user = await prisma.user.findUnique({ where: { id: (decoded as any).id } });
-            if (user?.role === 'ADMIN') {
-                req.user = user;
-                next();
-            } else {
-                res.status(403).json({ error: 'Admin access required' });
-            }
-        });
-    } else {
-        res.sendStatus(401);
+export const authenticateAdmin = async (req: AuthRequest, res: Response, next: NextFunction) => {
+    const token = getBearerToken(req);
+    if (!token) {
+        return res.sendStatus(401);
+    }
+
+    try {
+        const decoded = jwt.verify(token, JWT_SECRET);
+        if (!isJwtUserPayload(decoded)) {
+            return res.sendStatus(403);
+        }
+
+        const user = await prisma.user.findUnique({ where: { id: decoded.id } });
+        if (user?.role !== 'ADMIN') {
+            return res.status(403).json({ error: 'Admin access required' });
+        }
+
+        req.user = user;
+        return next();
+    } catch (error: any) {
+        if (error?.name !== 'JsonWebTokenError' && error?.name !== 'TokenExpiredError') {
+            console.error('[Auth] Admin authentication failed:', error.message);
+        }
+        return res.sendStatus(403);
     }
 };
