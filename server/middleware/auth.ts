@@ -28,7 +28,7 @@ function isJwtUserPayload(value: unknown): value is JwtUserPayload {
         Number.isInteger((value as JwtUserPayload).id);
 }
 
-export const authenticateJWT = (req: AuthRequest, res: Response, next: NextFunction) => {
+export const authenticateJWT = async (req: AuthRequest, res: Response, next: NextFunction) => {
     const token = getBearerToken(req);
     if (!token) {
         console.warn('[Auth] No Authorization header provided');
@@ -36,14 +36,23 @@ export const authenticateJWT = (req: AuthRequest, res: Response, next: NextFunct
     }
 
     try {
-        const user = jwt.verify(token, JWT_SECRET);
-        if (!isJwtUserPayload(user)) {
+        const decoded = jwt.verify(token, JWT_SECRET);
+        if (!isJwtUserPayload(decoded)) {
             return res.sendStatus(403);
+        }
+
+        const user = await prisma.user.findUnique({ where: { id: decoded.id } });
+        if (!user) {
+            return res.status(401).json({ error: 'Phiên đăng nhập không còn hợp lệ. Vui lòng đăng nhập lại.' });
         }
 
         req.user = user;
         return next();
     } catch (err: any) {
+        if (err?.name !== 'JsonWebTokenError' && err?.name !== 'TokenExpiredError') {
+            console.error('[Auth] User lookup failed:', err.message);
+            return res.sendStatus(500);
+        }
         console.error(`[Auth] JWT Error: ${err.message} (${req.method} ${req.originalUrl})`);
         return res.sendStatus(403);
     }
