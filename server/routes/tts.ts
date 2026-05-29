@@ -24,6 +24,9 @@ const generatingFiles = new Set<string>();
 const providerWarnings = new Set<string>();
 const audioDir = path.resolve(process.cwd(), 'audio');
 const AUDIO_TOKEN_TTL = '15m';
+const TTS_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
+const TTS_RATE_LIMIT_MAX_REQUESTS = 20;
+const ttsRequests = new Map<number, { count: number; resetAt: number }>();
 
 interface AudioAccessClaims {
     userId: number;
@@ -111,6 +114,18 @@ function getAudioAccessClaims(req: Request): AudioAccessClaims | null {
 
 function appendAudioToken(url: string, token: string): string {
     return `${url}&token=${encodeURIComponent(token)}`;
+}
+
+function isTtsRateLimited(userId: number): boolean {
+    const now = Date.now();
+    const current = ttsRequests.get(userId);
+    if (!current || current.resetAt <= now) {
+        ttsRequests.set(userId, { count: 1, resetAt: now + TTS_RATE_LIMIT_WINDOW_MS });
+        return false;
+    }
+
+    current.count += 1;
+    return current.count > TTS_RATE_LIMIT_MAX_REQUESTS;
 }
 
 function getMissingProviderConfig(voice: string): string | null {
@@ -269,6 +284,10 @@ router.post('/books/:bookId/chapters/:chapterId/tts', authenticateJWT, async (re
         if (allCached) {
             console.log(`[TTS Cache] ✅ Using cached audio for book ${parsedBookId}, chapter ${parsedChapterId}, voice ${voice}`);
             return res.json({ audioFiles });
+        }
+
+        if (isTtsRateLimited(req.user.id)) {
+            return res.status(429).json({ error: 'Bạn tạo audio quá nhiều lần. Vui lòng thử lại sau.' });
         }
 
         // 2. Generate missing segments
