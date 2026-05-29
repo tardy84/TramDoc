@@ -15,6 +15,9 @@ const epubProcessor = new EpubProcessor();
 const MAX_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024;
 const MAX_BOOKMARK_PREVIEW_LENGTH = 1000;
 const MAX_BOOKMARK_NOTE_LENGTH = 2000;
+const UPLOAD_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
+const UPLOAD_RATE_LIMIT_MAX_REQUESTS = 10;
+const uploadRequests = new Map<number, { count: number; resetAt: number }>();
 const upload = multer({
     dest: 'uploads/',
     limits: { fileSize: MAX_UPLOAD_SIZE_BYTES },
@@ -73,6 +76,18 @@ function normalizeBookmarkNote(value: unknown): string | null {
     return trimmed.length > 0 ? trimmed : null;
 }
 
+function isUploadRateLimited(userId: number): boolean {
+    const now = Date.now();
+    const current = uploadRequests.get(userId);
+    if (!current || current.resetAt <= now) {
+        uploadRequests.set(userId, { count: 1, resetAt: now + UPLOAD_RATE_LIMIT_WINDOW_MS });
+        return false;
+    }
+
+    current.count += 1;
+    return current.count > UPLOAD_RATE_LIMIT_MAX_REQUESTS;
+}
+
 // EPUB upload and processing
 router.post('/upload', authenticateJWT, handleBookUpload, async (req: AuthRequest, res: Response) => {
     const rawJobId = req.body.jobId;
@@ -88,6 +103,10 @@ router.post('/upload', authenticateJWT, handleBookUpload, async (req: AuthReques
 
         if (rawJobId && !jobId) {
             return res.status(400).json({ error: 'Job ID không hợp lệ' });
+        }
+
+        if (isUploadRateLimited(userId)) {
+            return res.status(429).json({ error: 'Bạn tải sách quá nhiều lần. Vui lòng thử lại sau.' });
         }
 
         if (jobId) {
