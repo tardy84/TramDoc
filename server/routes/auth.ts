@@ -8,9 +8,39 @@ import { JWT_SECRET } from '../config/env.js';
 const router = Router();
 const prisma = new PrismaClient();
 
+const LOGIN_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_RATE_LIMIT_MAX_ATTEMPTS = 10;
+const loginAttempts = new Map<string, { count: number; resetAt: number }>();
+
+function getLoginRateLimitKey(req: AuthRequest): string {
+    const forwardedFor = req.headers['x-forwarded-for'];
+    if (typeof forwardedFor === 'string' && forwardedFor.length > 0) {
+        return forwardedFor.split(',')[0].trim();
+    }
+
+    return req.ip || 'unknown';
+}
+
+function isLoginRateLimited(key: string): boolean {
+    const now = Date.now();
+    const current = loginAttempts.get(key);
+    if (!current || current.resetAt <= now) {
+        loginAttempts.set(key, { count: 1, resetAt: now + LOGIN_RATE_LIMIT_WINDOW_MS });
+        return false;
+    }
+
+    current.count += 1;
+    return current.count > LOGIN_RATE_LIMIT_MAX_ATTEMPTS;
+}
+
 // Login (Strictly using .env configurations)
 router.post('/login', async (req, res) => {
     try {
+        const rateLimitKey = getLoginRateLimitKey(req);
+        if (isLoginRateLimited(rateLimitKey)) {
+            return res.status(429).json({ error: 'Bạn thử đăng nhập quá nhiều lần. Vui lòng thử lại sau.' });
+        }
+
         const { username, password } = req.body;
         if (typeof username !== 'string' || typeof password !== 'string') {
             return res.status(400).json({ error: 'Tên đăng nhập hoặc mật khẩu không hợp lệ' });
@@ -23,6 +53,7 @@ router.post('/login', async (req, res) => {
         }
 
         if (username === envUser && password === envPass) {
+            loginAttempts.delete(rateLimitKey);
             const passwordHash = await bcrypt.hash(password, 10);
 
             // Upsert User ID 1 to ensure referential integrity for uploads and books
