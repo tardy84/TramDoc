@@ -13,3 +13,5 @@ audio/
 Audiobook_Stable_Backup.zip
 
 .codex/
+
+*.tsbuildinfo
