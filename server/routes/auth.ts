@@ -21,26 +21,33 @@ function getLoginRateLimitKey(req: AuthRequest): string {
     return req.ip || 'unknown';
 }
 
-function isLoginRateLimited(key: string): boolean {
+function getActiveLoginAttempt(key: string): { count: number; resetAt: number } | null {
     const now = Date.now();
     const current = loginAttempts.get(key);
-    if (!current || current.resetAt <= now) {
+    if (!current || current.resetAt <= now) return null;
+    return current;
+}
+
+function isLoginRateLimited(key: string): boolean {
+    const current = getActiveLoginAttempt(key);
+    return Boolean(current && current.count >= LOGIN_RATE_LIMIT_MAX_ATTEMPTS);
+}
+
+function recordFailedLoginAttempt(key: string): void {
+    const now = Date.now();
+    const current = getActiveLoginAttempt(key);
+    if (!current) {
         loginAttempts.set(key, { count: 1, resetAt: now + LOGIN_RATE_LIMIT_WINDOW_MS });
-        return false;
+        return;
     }
 
     current.count += 1;
-    return current.count > LOGIN_RATE_LIMIT_MAX_ATTEMPTS;
 }
 
 // Login (Strictly using .env configurations)
 router.post('/login', async (req, res) => {
     try {
         const rateLimitKey = getLoginRateLimitKey(req);
-        if (isLoginRateLimited(rateLimitKey)) {
-            return res.status(429).json({ error: 'Bạn thử đăng nhập quá nhiều lần. Vui lòng thử lại sau.' });
-        }
-
         const { username, password } = req.body;
         if (typeof username !== 'string' || typeof password !== 'string') {
             return res.status(400).json({ error: 'Tên đăng nhập hoặc mật khẩu không hợp lệ' });
@@ -52,7 +59,8 @@ router.post('/login', async (req, res) => {
             return res.status(503).json({ error: 'Đăng nhập chưa được cấu hình' });
         }
 
-        if (username === envUser && password === envPass) {
+        const validCredentials = username === envUser && password === envPass;
+        if (validCredentials) {
             loginAttempts.delete(rateLimitKey);
             const passwordHash = await bcrypt.hash(password, 10);
 
@@ -67,6 +75,11 @@ router.post('/login', async (req, res) => {
             return res.json({ token, user: { id: user.id, email: user.email, username: user.email, name: user.name, role: user.role } });
         }
 
+        if (isLoginRateLimited(rateLimitKey)) {
+            return res.status(429).json({ error: 'Bạn thử đăng nhập quá nhiều lần. Vui lòng thử lại sau.' });
+        }
+
+        recordFailedLoginAttempt(rateLimitKey);
         return res.status(400).json({ error: 'Tên đăng nhập hoặc mật khẩu không chính xác' });
     } catch (error: any) {
         console.error('[Auth Login Error]:', error);
