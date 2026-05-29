@@ -334,6 +334,18 @@ router.post('/books/:bookId/chapters/:chapterId/tts', authenticateJWT, async (re
     }
 });
 
+router.post('/vbee-callback', (req: Request, res: Response) => {
+    const result = req.body?.result;
+    const requestId = typeof result?.request_id === 'string' ? result.request_id : undefined;
+    const status = typeof result?.status === 'string' ? result.status : undefined;
+
+    if (requestId || status) {
+        console.log(`[VbeeTTS] Callback received${requestId ? ` for ${requestId}` : ''}${status ? ` (${status})` : ''}`);
+    }
+
+    res.json({ success: true });
+});
+
 // Dynamic Audio Serving (On-Demand Generation + Lookahead)
 router.get('/audio/:filename', async (req: Request, res: Response) => {
     const { filename } = req.params as { filename: string };

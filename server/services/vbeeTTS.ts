@@ -4,7 +4,7 @@ const VBEE_APP_ID = process.env.VBEE_APP_ID;
 const VBEE_TOKEN = process.env.VBEE_TOKEN;
 const VBEE_API_URL = 'https://vbee.vn/api/v1/tts';
 
-// Default callback URL — Vbee requires it but we poll instead
+// Vbee requires a callback URL, but Trạm Đọc still polls for the final audio.
 const VBEE_CALLBACK_URL = process.env.VBEE_CALLBACK_URL || 'https://localhost/vbee-callback';
 
 const POLL_INTERVAL_MS = 1500;

@@ -56,6 +56,25 @@ curl http://localhost:3005/ping
 
 Kết quả mong đợi: `pong`.
 
+## Cấu hình Vbee TTS
+
+Điền key ở `/Users/nguyenphong/projects/tramdoc/server/.env`:
+
+```env
+VBEE_APP_ID="your-vbee-app-id"
+VBEE_TOKEN="your-vbee-token"
+VBEE_CALLBACK_URL="https://localhost/vbee-callback"
+```
+
+Nếu Vbee yêu cầu callback public HTTPS, dùng domain/ngrok trỏ về server:
+
+```env
+VBEE_CALLBACK_URL="https://your-domain.com/vbee-callback"
+```
+
+Server có endpoint `POST /vbee-callback`, nhưng app vẫn chủ động poll Vbee để lấy audio.
+Sau khi sửa `.env`, restart server.
+
 ## Verification
 
 Client:
