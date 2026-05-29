@@ -10,7 +10,8 @@
     "prisma:generate": "prisma generate",
     "prisma:validate": "DATABASE_URL=${DATABASE_URL:-file:./prisma/dev.db} prisma validate",
     "test": "npm run typecheck && npm run prisma:validate",
-    "dev": "tsx watch index.ts"
+    "dev": "tsx watch index.ts",
+    "smoke:api": "node scripts/smoke-api.mjs"
   },
   "keywords": [],
   "author": "",
