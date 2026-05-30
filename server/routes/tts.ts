@@ -128,6 +128,10 @@ function isTtsRateLimited(userId: number): boolean {
     return current.count > TTS_RATE_LIMIT_MAX_REQUESTS;
 }
 
+function getSafeErrorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+}
+
 function getMissingProviderConfig(voice: string): string | null {
     if (voice.startsWith('azure-')) {
         if (!process.env.AZURE_SPEECH_KEY || !process.env.AZURE_SPEECH_REGION) return 'Azure Speech is not configured';
@@ -225,7 +229,7 @@ async function generateSegment(bookId: number, chapterId: number, segmentIndex: 
         console.log(`[Audio] ✅ Generated: ${fileName}`);
         return true;
     } catch (error) {
-        console.error(`[Audio] ❌ Failed to generate ${fileName}:`, error);
+        console.error(`[Audio] ❌ Failed to generate ${fileName}: ${getSafeErrorMessage(error)}`);
         return false;
     } finally {
         generatingFiles.delete(fileName);
@@ -292,7 +296,7 @@ router.post('/books/:bookId/chapters/:chapterId/tts', authenticateJWT, async (re
 
         // 2. Generate missing segments
         console.log(`[TTS] Generating missing audio for book ${parsedBookId}, chapter ${parsedChapterId} with voice ${voice}`);
-        const PRELOAD_COUNT = 3;
+        const PRELOAD_COUNT = voice.startsWith('vbee-') ? 1 : 3;
 
         for (let i = 0; i < PRELOAD_COUNT; i++) {
             const fileName = buildAudioFileName(parsedBookId, parsedChapterId, voice, i);
@@ -310,8 +314,8 @@ router.post('/books/:bookId/chapters/:chapterId/tts', authenticateJWT, async (re
         const remainingStartIndex = PRELOAD_COUNT;
         if (chapter.segments.length > remainingStartIndex) {
             (async () => {
-                const CONCURRENCY = 5;
-                const DELAY_BETWEEN_BATCHES = 0;
+                const CONCURRENCY = voice.startsWith('vbee-') ? 2 : 5;
+                const DELAY_BETWEEN_BATCHES = voice.startsWith('vbee-') ? 500 : 0;
 
                 for (let i = remainingStartIndex; i < chapter.segments.length; i += CONCURRENCY) {
                     const batch = chapter.segments.slice(i, i + CONCURRENCY);
@@ -329,7 +333,7 @@ router.post('/books/:bookId/chapters/:chapterId/tts', authenticateJWT, async (re
 
         res.json({ audioFiles });
     } catch (error: any) {
-        console.error('Error generating TTS:', error);
+        console.error('Error generating TTS:', getSafeErrorMessage(error));
         res.status(500).json({ error: error.message });
     }
 });

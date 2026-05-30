@@ -9,6 +9,16 @@ const VBEE_CALLBACK_URL = process.env.VBEE_CALLBACK_URL || 'https://localhost/vb
 
 const POLL_INTERVAL_MS = 1500;
 const MAX_POLL_ATTEMPTS = 40; // 40 * 1.5s = 60s max wait
+const SUBMIT_RETRY_ATTEMPTS = 2;
+
+function sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function isRetriableSubmitError(error: any): boolean {
+    const status = error?.response?.status;
+    return status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
+}
 
 export class VbeeTTSService {
     async synthesize(
@@ -29,26 +39,40 @@ export class VbeeTTSService {
         console.log(`[VbeeTTS] Synthesizing ${text.length} chars with voice: ${voiceCode}`);
 
         // Step 1: Submit TTS request
-        const submitResponse = await axios.post(
-            VBEE_API_URL,
-            {
-                app_id: VBEE_APP_ID,
-                callback_url: VBEE_CALLBACK_URL,
-                input_text: text,
-                voice_code: voiceCode,
-                audio_type: 'mp3',
-                speed_rate: '1.0',
-            },
-            {
-                headers: {
-                    'Authorization': `Bearer ${VBEE_TOKEN}`,
-                    'Content-Type': 'application/json',
-                },
-            }
-        );
+        let submitResponse;
+        for (let attempt = 0; attempt <= SUBMIT_RETRY_ATTEMPTS; attempt++) {
+            try {
+                submitResponse = await axios.post(
+                    VBEE_API_URL,
+                    {
+                        app_id: VBEE_APP_ID,
+                        callback_url: VBEE_CALLBACK_URL,
+                        input_text: text,
+                        voice_code: voiceCode,
+                        audio_type: 'mp3',
+                        speed_rate: '1.0',
+                    },
+                    {
+                        headers: {
+                            'Authorization': `Bearer ${VBEE_TOKEN}`,
+                            'Content-Type': 'application/json',
+                        },
+                        timeout: 15000,
+                    }
+                );
+                break;
+            } catch (error: any) {
+                if (!isRetriableSubmitError(error) || attempt === SUBMIT_RETRY_ATTEMPTS) {
+                    throw new Error(`Vbee TTS submit failed: ${error?.response?.status || error.message}`);
+                }
 
-        if (submitResponse.data.status !== 1) {
-            throw new Error(`Vbee TTS submit failed: ${submitResponse.data.error_message || 'Unknown error'}`);
+                console.warn(`[VbeeTTS] Submit retry ${attempt + 1}/${SUBMIT_RETRY_ATTEMPTS} after ${error?.response?.status || error.message}`);
+                await sleep((attempt + 1) * 1000);
+            }
+        }
+
+        if (!submitResponse || submitResponse.data.status !== 1) {
+            throw new Error(`Vbee TTS submit failed: ${submitResponse?.data?.error_message || 'Unknown error'}`);
         }
 
         const requestId = submitResponse.data.result.request_id;
