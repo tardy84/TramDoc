@@ -1,4 +1,4 @@
-
+import { resolveApiUrl } from '../../constants';
 import { Book } from '../../types';
 
 interface BookCardProps {
@@ -19,7 +19,7 @@ export default function BookCard({ book, onSelect, onDelete }: BookCardProps) {
         >
             <div className="aspect-[2/3] w-full bg-slate-950 relative overflow-hidden">
                 <img
-                    src={book.coverImageUrl || '/default-cover.png'}
+                    src={resolveApiUrl(book.coverImageUrl, '/default-cover.png')}
                     alt={book.title}
                     className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105 group-hover:blur-[2px] group-hover:brightness-50"
                 />

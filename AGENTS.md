@@ -95,11 +95,63 @@ npm run dev
 
 Open the Vite URL printed by the client. The API should answer `GET http://localhost:3005/ping` with `pong`.
 
+## Core working principles inherited from Trạm PT
+
+Apply the same operating discipline from Trạm PT, adapted to Trạm Đọc's smaller codebase and reader/TTS product shape.
+
+1. **Verify before acting**
+   - Inspect live source, git state, and current behavior before trusting handoff notes or memory.
+   - Do not claim a feature, bug, or gap exists until checking the relevant files/routes/tests.
+   - For EPUB/TTS work, fixture metrics and real-book probes are stronger evidence than compile success.
+
+2. **Small, safe, reviewable slices**
+   - One focused surface, bug class, provider boundary, or parser heuristic per branch/PR.
+   - Avoid broad formatting churn, speculative abstractions, and unrelated cleanup.
+   - Do not touch unrelated dirty files from another lane, especially iOS/Capacitor assets or client release work.
+
+3. **Product-first acceptance criteria**
+   - Start from user-visible behavior: upload success, clean reader text, natural audio playback, stable iOS preview, clear Vietnamese error copy.
+   - Define success criteria before editing and verify them after editing.
+   - Prefer concrete metrics: chapter count, segment count, max segment length, cache hit/stale/missing counts, build/test output.
+
+4. **Vietnamese-first UX and TTS quality**
+   - Vietnamese copy is the default user-facing language.
+   - For EPUB parsing, optimize for reading order and TTS clarity, not visual layout fidelity.
+   - Keep text segments provider-safe: target roughly 220–420 characters and never exceed 700 characters.
+   - Treat repeated ToC, cover pages, ebook-project ads, publisher metadata, and piracy-site promos as parser noise unless they contain real prose.
+
+5. **Security and data safety by default**
+   - No secrets in client bundles or committed files.
+   - Keep provider keys server-side when adding or hardening TTS paths.
+   - Never run destructive DB/file cleanup or mass audio regeneration without explicit confirmation.
+   - If changing auth, upload, progress, bookmark, or audio serving paths, trace ownership/auth checks end-to-end.
+
+6. **Evidence-backed no-idle loop**
+   - After a safe green slice, identify the next small gap instead of stopping at a recap.
+   - Continue autonomously only inside safe bounds: docs, tests, parser/TTS hardening, UI polish, and local verification.
+   - Ask Sếp before production deploys, destructive actions, large rewrites, schema migrations with user-data risk, or merging a risky/broad branch.
+
+7. **Karpathy coding principles apply**
+   - Think before coding: surface assumptions and ask when ambiguity changes the action.
+   - Simplicity first: minimum code that solves the real problem.
+   - Surgical changes: every changed line must trace to the task.
+   - Goal-driven execution: test or otherwise verify the stated success criteria.
+
 ## Verification commands
 
 Before proposing changes as done, run the narrowest relevant checks and include the output summary in the handoff.
 
 ```bash
+# server typecheck + Prisma sanity + EPUB parser smoke
+cd /Users/nguyenphong/projects/tramdoc/server
+npm run typecheck
+npm run prisma:validate
+npm run smoke:epub
+
+# server aggregate test gate
+cd /Users/nguyenphong/projects/tramdoc/server
+npm test
+
 # client typecheck + build
 cd /Users/nguyenphong/projects/tramdoc/client
 npm run build
@@ -108,17 +160,14 @@ npm run build
 cd /Users/nguyenphong/projects/tramdoc/client
 npm run lint
 
-# server compile sanity, because server/package.json currently has no build script
-cd /Users/nguyenphong/projects/tramdoc/server
-npx tsc --noEmit
-
-# Prisma sanity, if touching schema/routes/services depending on Prisma
+# Prisma generate, if touching schema/routes/services depending on Prisma
 cd /Users/nguyenphong/projects/tramdoc/server
 npx prisma generate
-npx prisma validate
 ```
 
-Known caveat: `server/package.json` has a placeholder `npm test` that intentionally exits with error; do not use it as a project health signal until real tests are added.
+Notes:
+- `server/package.json` now has a real `npm test` gate (`typecheck` + `prisma:validate`).
+- `npm run smoke:epub` processes fixture EPUBs and asserts chapter/segment quality; run it for parser/TTS changes.
 
 ## Coding rules for Codex
 

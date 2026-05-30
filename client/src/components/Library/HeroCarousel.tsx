@@ -1,4 +1,5 @@
 
+import { resolveApiUrl } from '../../constants';
 import { Book } from '../../types';
 
 interface HeroCarouselProps {
@@ -47,7 +48,7 @@ export default function HeroCarousel({ heroBooks, activeHeroIndex, setActiveHero
                     >
                         <div className="absolute inset-0 z-0">
                             <img
-                                src={heroBook.coverImageUrl || '/default-cover.png'}
+                                src={resolveApiUrl(heroBook.coverImageUrl, '/default-cover.png')}
                                 alt=""
                                 className="w-full h-full object-cover blur-[80px] opacity-40 scale-150"
                             />
@@ -58,7 +59,7 @@ export default function HeroCarousel({ heroBooks, activeHeroIndex, setActiveHero
                             <div className="flex flex-row items-start gap-6 w-full text-left">
                                 <div className="w-44 md:w-64 aspect-[2/3] flex-shrink-0 relative">
                                     <img
-                                        src={heroBook.coverImageUrl || '/default-cover.png'}
+                                        src={resolveApiUrl(heroBook.coverImageUrl, '/default-cover.png')}
                                         className="h-full w-full object-cover rounded-xl shadow-2xl border border-white/10"
                                         alt={heroBook.title}
                                     />

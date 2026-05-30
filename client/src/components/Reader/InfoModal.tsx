@@ -81,7 +81,7 @@ const InfoModal: React.FC<InfoModalProps> = ({ isOpen, onClose, theme = 'dark' }
                             <GuideStep
                                 icon="🎨"
                                 title="Cá nhân hóa"
-                                desc="Thay đổi màu nền, font chữ và giọng đọc của nhiều nhà cung cấp (Google, Vbee, Browser)."
+                                desc="Thay đổi màu nền, font chữ và chọn giọng đọc Vbee phù hợp với cách nghe của bạn."
                                 cardClass={cardClass}
                             />
                         </div>

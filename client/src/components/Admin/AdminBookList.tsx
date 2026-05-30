@@ -1,5 +1,5 @@
 import React from 'react';
-import { API_BASE_URL } from '../../constants';
+import { resolveApiUrl } from '../../constants';
 import ConfirmModal from '../Shared/ConfirmModal';
 import { AdminBook } from '../../types';
 
@@ -104,7 +104,7 @@ const AdminBookList: React.FC<AdminBookListProps> = ({ books, searchQuery, setSe
                     >
                         <div className={`relative aspect-[2/3] bg-white/5 rounded-2xl md:rounded-3xl border overflow-hidden shadow-lg transition-all duration-300 group-hover:-translate-y-1 ${selectedIds.has(b.id) ? 'border-emerald-500 ring-2 ring-emerald-500/50' : 'border-white/5 group-hover:bg-white/10 group-hover:border-white/10'}`}>
                             <img
-                                src={b.coverImageUrl ? `${API_BASE_URL}${b.coverImageUrl}` : '/default-cover.png'}
+                                src={resolveApiUrl(b.coverImageUrl, '/default-cover.png')}
                                 className={`w-full h-full object-cover transition-all ${selectedIds.has(b.id) ? 'opacity-40 grayscale' : 'opacity-80 group-hover:opacity-100'}`}
                                 alt={b.title}
                             />

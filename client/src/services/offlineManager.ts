@@ -1,6 +1,6 @@
 import { openDB, DBSchema, IDBPDatabase } from 'idb';
 import axios from 'axios';
-import { API_BASE_URL } from '../constants';
+import { resolveApiUrl } from '../constants';
 import { Book, Chapter } from '../types';
 
 interface OfflineBook extends DBSchema {
@@ -49,7 +49,7 @@ export const saveBookOffline = async (book: Book) => {
     let coverBlob: Blob | undefined;
     if (book.coverImageUrl) {
         try {
-            const res = await axios.get(`${API_BASE_URL}${book.coverImageUrl}`, { responseType: 'blob' });
+            const res = await axios.get(resolveApiUrl(book.coverImageUrl), { responseType: 'blob' });
             coverBlob = res.data;
         } catch (e) {
             console.error('Failed to download cover', e);
@@ -70,7 +70,7 @@ export const saveChapterAudio = async (bookId: number, chapterId: number, audioF
     for (let i = 0; i < audioFiles.length; i++) {
         const fileUrl = audioFiles[i];
         try {
-            const res = await axios.get(`${API_BASE_URL}${fileUrl}`, { responseType: 'blob' });
+            const res = await axios.get(resolveApiUrl(fileUrl), { responseType: 'blob' });
             const key = `${bookId}_${chapterId}_${i}`;
             await db.put('audio', {
                 key, // Matches keyPath

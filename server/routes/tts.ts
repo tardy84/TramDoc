@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import path from 'path';
 import fs from 'fs/promises';
+import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import { authenticateJWT, AuthRequest } from '../middleware/auth.js';
 import { JWT_SECRET } from '../config/env.js';
@@ -26,12 +27,20 @@ const audioDir = path.resolve(process.cwd(), 'audio');
 const AUDIO_TOKEN_TTL = '15m';
 const TTS_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
 const TTS_RATE_LIMIT_MAX_REQUESTS = 20;
+const TTS_GENERATION_MAX_ATTEMPTS = 2;
+const TTS_GENERATION_RETRY_DELAY_MS = 750;
 const ttsRequests = new Map<number, { count: number; resetAt: number }>();
 
 interface AudioAccessClaims {
     userId: number;
     bookId?: number;
     chapterId?: number;
+}
+
+interface SegmentForAudioCache {
+    content: string;
+    role: string;
+    orderIndex: number;
 }
 
 function isSafeVoice(voice: unknown): voice is string {
@@ -46,6 +55,10 @@ function buildAudioFileName(bookId: number, chapterId: number, voice: string, se
     return `${bookId}_${chapterId}_${voice}_${segmentIndex}.mp3`;
 }
 
+function buildAudioMetadataFileName(audioFileName: string): string {
+    return `${audioFileName}.json`;
+}
+
 function resolveAudioPath(fileName: string): string | null {
     if (!/^[A-Za-z0-9._-]+\.mp3$/.test(fileName) || fileName.includes('..')) {
         return null;
@@ -57,6 +70,70 @@ function resolveAudioPath(fileName: string): string | null {
     }
 
     return resolved;
+}
+
+function resolveAudioMetadataPath(audioFileName: string): string | null {
+    const metadataFileName = buildAudioMetadataFileName(audioFileName);
+    if (!/^[A-Za-z0-9._-]+\.mp3\.json$/.test(metadataFileName) || metadataFileName.includes('..')) {
+        return null;
+    }
+
+    const resolved = path.resolve(audioDir, metadataFileName);
+    if (!resolved.startsWith(`${audioDir}${path.sep}`)) {
+        return null;
+    }
+
+    return resolved;
+}
+
+function getSegmentContentHash(segment: SegmentForAudioCache, voice: string): string {
+    return crypto
+        .createHash('sha256')
+        .update(JSON.stringify({ content: segment.content, role: segment.role, voice }))
+        .digest('hex');
+}
+
+async function isSegmentAudioCached(filePath: string, metadataPath: string, segment: SegmentForAudioCache, voice: string): Promise<boolean> {
+    try {
+        const [metadataRaw] = await Promise.all([
+            fs.readFile(metadataPath, 'utf8'),
+            fs.access(filePath),
+        ]);
+        const metadata = JSON.parse(metadataRaw) as { contentHash?: unknown };
+        return metadata.contentHash === getSegmentContentHash(segment, voice);
+    } catch {
+        return false;
+    }
+}
+
+async function writeAudioMetadata(metadataPath: string, segment: SegmentForAudioCache, voice: string): Promise<void> {
+    await fs.writeFile(metadataPath, JSON.stringify({
+        contentHash: getSegmentContentHash(segment, voice),
+        orderIndex: segment.orderIndex,
+        role: segment.role,
+        voice,
+        generatedAt: new Date().toISOString(),
+    }, null, 2));
+}
+
+async function deleteAudioCache(fileName: string): Promise<void> {
+    const filePath = resolveAudioPath(fileName);
+    const metadataPath = resolveAudioMetadataPath(fileName);
+    if (!filePath || !metadataPath) return;
+
+    await Promise.all([
+        fs.unlink(filePath).catch(() => { }),
+        fs.unlink(metadataPath).catch(() => { }),
+    ]);
+}
+
+async function doesFileExist(filePath: string): Promise<boolean> {
+    try {
+        await fs.access(filePath);
+        return true;
+    } catch {
+        return false;
+    }
 }
 
 function parsePositiveInt(value: unknown): number | null {
@@ -132,6 +209,10 @@ function getSafeErrorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
 }
 
+function delay(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 function getMissingProviderConfig(voice: string): string | null {
     if (voice.startsWith('azure-')) {
         if (!process.env.AZURE_SPEECH_KEY || !process.env.AZURE_SPEECH_REGION) return 'Azure Speech is not configured';
@@ -160,14 +241,21 @@ async function generateSegment(bookId: number, chapterId: number, segmentIndex: 
 
     const fileName = buildAudioFileName(bookId, chapterId, voice, segmentIndex);
     const filePath = resolveAudioPath(fileName);
-    if (!filePath) return false;
+    const metadataPath = resolveAudioMetadataPath(fileName);
+    if (!filePath || !metadataPath) return false;
 
-    // 1. Check if already exists
-    try {
-        await fs.access(filePath);
+    const segment = await prisma.textSegment.findFirst({
+        where: { chapterId, orderIndex: segmentIndex, chapter: { bookId } },
+        select: { content: true, role: true, orderIndex: true },
+    });
+
+    if (!segment) {
+        return false;
+    }
+
+    // 1. Check if already exists for the current segment content/voice
+    if (await isSegmentAudioCached(filePath, metadataPath, segment, voice)) {
         return true; // Exists
-    } catch {
-        // Continue
     }
 
     // 2. Check if currently generating (Dedup)
@@ -182,15 +270,14 @@ async function generateSegment(bookId: number, chapterId: number, segmentIndex: 
             attempts++;
         }
 
-        // After waiting, check if file exists
-        try {
-            await fs.access(filePath);
+        // After waiting, check if the generated file matches the current segment content
+        if (await isSegmentAudioCached(filePath, metadataPath, segment, voice)) {
             console.log(`[Audio] ✅ File ${fileName} ready after wait.`);
             return true;
-        } catch {
-            console.error(`[Audio] ❌ File ${fileName} not found after waiting.`);
-            return false;
         }
+
+        console.error(`[Audio] ❌ File ${fileName} not found or stale after waiting.`);
+        return false;
     }
 
     const missingProviderConfig = getMissingProviderConfig(voice);
@@ -206,26 +293,29 @@ async function generateSegment(bookId: number, chapterId: number, segmentIndex: 
     generatingFiles.add(fileName);
 
     try {
-        // Fetch DB Segment
-        const segment = await prisma.textSegment.findFirst({
-            where: { chapterId, orderIndex: segmentIndex, chapter: { bookId } }
-        });
-
-        if (!segment) {
-            generatingFiles.delete(fileName);
-            return false;
-        }
-
         const ttsService = voice.startsWith('vbee-') ? vbeeTTS : voice.startsWith('minimax-') ? minimaxTTS : voice.startsWith('azure-') ? azureTTS : voice.startsWith('gemini-') ? geminiTTS : googleTTS;
 
-        const buffer = await ttsService.synthesize(
-            segment.content,
-            segment.role as any,
-            voice
-        );
+        let buffer: Buffer | null = null;
+        for (let attempt = 1; attempt <= TTS_GENERATION_MAX_ATTEMPTS; attempt++) {
+            try {
+                buffer = await ttsService.synthesize(
+                    segment.content,
+                    segment.role as any,
+                    voice
+                );
+                break;
+            } catch (error) {
+                if (attempt >= TTS_GENERATION_MAX_ATTEMPTS) throw error;
+                console.warn(`[Audio] ⚠️ Retry ${attempt}/${TTS_GENERATION_MAX_ATTEMPTS - 1} for ${fileName}: ${getSafeErrorMessage(error)}`);
+                await delay(TTS_GENERATION_RETRY_DELAY_MS * attempt);
+            }
+        }
+
+        if (!buffer) return false;
 
         await fs.mkdir(audioDir, { recursive: true });
         await fs.writeFile(filePath, buffer);
+        await writeAudioMetadata(metadataPath, segment, voice);
         console.log(`[Audio] ✅ Generated: ${fileName}`);
         return true;
     } catch (error) {
@@ -235,6 +325,143 @@ async function generateSegment(bookId: number, chapterId: number, segmentIndex: 
         generatingFiles.delete(fileName);
     }
 }
+
+// Inspect TTS cache health for a chapter/voice
+router.get('/books/:bookId/chapters/:chapterId/tts/status', authenticateJWT, async (req: AuthRequest, res: Response) => {
+    try {
+        const parsedBookId = parsePositiveInt(req.params.bookId);
+        const parsedChapterId = parsePositiveInt(req.params.chapterId);
+        if (!parsedBookId || !parsedChapterId) {
+            return res.status(400).json({ error: 'Book hoặc chapter ID không hợp lệ' });
+        }
+
+        const voice = req.query.voice;
+        if (!isSafeVoice(voice)) {
+            return res.status(400).json({ error: 'Giọng đọc không hợp lệ' });
+        }
+
+        const chapter = await prisma.chapter.findFirst({
+            where: {
+                id: parsedChapterId,
+                bookId: parsedBookId,
+                book: { userId: req.user.id }
+            },
+            include: { segments: { orderBy: { orderIndex: 'asc' } } },
+        });
+
+        if (!chapter) {
+            return res.status(404).json({ error: 'Chapter not found' });
+        }
+
+        let cached = 0;
+        let stale = 0;
+        let missing = 0;
+
+        for (let i = 0; i < chapter.segments.length; i++) {
+            const segment = chapter.segments[i];
+            const fileName = buildAudioFileName(parsedBookId, parsedChapterId, voice, i);
+            const filePath = resolveAudioPath(fileName);
+            const metadataPath = resolveAudioMetadataPath(fileName);
+            if (!filePath || !metadataPath) return res.status(400).json({ error: 'Tên file audio không hợp lệ' });
+
+            if (await isSegmentAudioCached(filePath, metadataPath, segment, voice)) {
+                cached++;
+            } else if (await doesFileExist(filePath)) {
+                stale++;
+            } else {
+                missing++;
+            }
+        }
+
+        return res.json({ total: chapter.segments.length, cached, stale, missing });
+    } catch (error: any) {
+        console.error('Error reading TTS status:', getSafeErrorMessage(error));
+        return res.status(500).json({ error: error.message });
+    }
+});
+
+// Force regenerate TTS cache for one segment, or for a whole chapter when segmentIndex is omitted
+router.post('/books/:bookId/chapters/:chapterId/tts/regenerate', authenticateJWT, async (req: AuthRequest, res: Response) => {
+    try {
+        const parsedBookId = parsePositiveInt(req.params.bookId);
+        const parsedChapterId = parsePositiveInt(req.params.chapterId);
+        if (!parsedBookId || !parsedChapterId) {
+            return res.status(400).json({ error: 'Book hoặc chapter ID không hợp lệ' });
+        }
+
+        const { voice } = req.body;
+        if (!isSafeVoice(voice)) {
+            return res.status(400).json({ error: 'Giọng đọc không hợp lệ' });
+        }
+
+        const chapter = await prisma.chapter.findFirst({
+            where: {
+                id: parsedChapterId,
+                bookId: parsedBookId,
+                book: { userId: req.user.id }
+            },
+            include: { segments: { orderBy: { orderIndex: 'asc' } } },
+        });
+
+        if (!chapter) {
+            return res.status(404).json({ error: 'Chapter not found' });
+        }
+
+        if (isTtsRateLimited(req.user.id)) {
+            return res.status(429).json({ error: 'Bạn tạo audio quá nhiều lần. Vui lòng thử lại sau.' });
+        }
+
+        const segmentIndex = req.body.segmentIndex === undefined ? null : parseNonNegativeInt(req.body.segmentIndex);
+        if (req.body.segmentIndex !== undefined && segmentIndex === null) {
+            return res.status(400).json({ error: 'Segment index không hợp lệ' });
+        }
+
+        if (segmentIndex !== null) {
+            if (segmentIndex >= chapter.segments.length) {
+                return res.status(404).json({ error: 'Segment not found' });
+            }
+
+            const fileName = buildAudioFileName(parsedBookId, parsedChapterId, voice, segmentIndex);
+            await deleteAudioCache(fileName);
+            const generated = await generateSegment(parsedBookId, parsedChapterId, segmentIndex, voice);
+            return res.json({ scope: 'segment', segmentIndex, generated });
+        }
+
+        for (let i = 0; i < chapter.segments.length; i++) {
+            const fileName = buildAudioFileName(parsedBookId, parsedChapterId, voice, i);
+            await deleteAudioCache(fileName);
+        }
+
+        const PRELOAD_COUNT = voice.startsWith('vbee-') ? 1 : 3;
+        const preloaded: number[] = [];
+        for (let i = 0; i < Math.min(PRELOAD_COUNT, chapter.segments.length); i++) {
+            if (await generateSegment(parsedBookId, parsedChapterId, i, voice)) {
+                preloaded.push(i);
+            }
+        }
+
+        (async () => {
+            const CONCURRENCY = voice.startsWith('vbee-') ? 2 : 5;
+            const DELAY_BETWEEN_BATCHES = voice.startsWith('vbee-') ? 500 : 0;
+            for (let i = PRELOAD_COUNT; i < chapter.segments.length; i += CONCURRENCY) {
+                const batch = chapter.segments.slice(i, i + CONCURRENCY);
+                await Promise.all(batch.map(async (_, index) => {
+                    const globalIndex = i + index;
+                    await generateSegment(parsedBookId, parsedChapterId, globalIndex, voice);
+                }));
+
+                if (DELAY_BETWEEN_BATCHES > 0) {
+                    await delay(DELAY_BETWEEN_BATCHES);
+                }
+            }
+        })();
+
+        return res.json({ scope: 'chapter', total: chapter.segments.length, preloaded, background: chapter.segments.length > PRELOAD_COUNT });
+    } catch (error: any) {
+        console.error('Error regenerating TTS:', getSafeErrorMessage(error));
+        return res.status(500).json({ error: error.message });
+    }
+});
 
 // Generate TTS for a specific book chapter
 router.post('/books/:bookId/chapters/:chapterId/tts', authenticateJWT, async (req: AuthRequest, res: Response) => {
@@ -270,19 +497,18 @@ router.post('/books/:bookId/chapters/:chapterId/tts', authenticateJWT, async (re
         const audioFiles: string[] = [];
         let allCached = true;
 
-        // 1. Check if audio files for THIS VOICE already exist
+        // 1. Check if audio files for THIS VOICE already exist and match current segment content
         for (let i = 0; i < chapter.segments.length; i++) {
+            const segment = chapter.segments[i];
             const fileName = buildAudioFileName(parsedBookId, parsedChapterId, voice, i);
             const filePath = resolveAudioPath(fileName);
-            if (!filePath) return res.status(400).json({ error: 'Tên file audio không hợp lệ' });
+            const metadataPath = resolveAudioMetadataPath(fileName);
+            if (!filePath || !metadataPath) return res.status(400).json({ error: 'Tên file audio không hợp lệ' });
 
-            try {
-                await fs.access(filePath);
-                audioFiles.push(appendAudioToken(`/audio/${fileName}?t=${timestamp}`, audioToken));
-            } catch {
+            if (!await isSegmentAudioCached(filePath, metadataPath, segment, voice)) {
                 allCached = false;
-                audioFiles.push(appendAudioToken(`/audio/${fileName}?t=${timestamp}`, audioToken));
             }
+            audioFiles.push(appendAudioToken(`/audio/${fileName}?t=${timestamp}`, audioToken));
         }
 
         if (allCached) {
@@ -298,16 +524,8 @@ router.post('/books/:bookId/chapters/:chapterId/tts', authenticateJWT, async (re
         console.log(`[TTS] Generating missing audio for book ${parsedBookId}, chapter ${parsedChapterId} with voice ${voice}`);
         const PRELOAD_COUNT = voice.startsWith('vbee-') ? 1 : 3;
 
-        for (let i = 0; i < PRELOAD_COUNT; i++) {
-            const fileName = buildAudioFileName(parsedBookId, parsedChapterId, voice, i);
-            const filePath = resolveAudioPath(fileName);
-            if (!filePath) return res.status(400).json({ error: 'Tên file audio không hợp lệ' });
-
-            try {
-                await fs.access(filePath);
-            } catch {
-                await generateSegment(parsedBookId, parsedChapterId, i, voice);
-            }
+        for (let i = 0; i < Math.min(PRELOAD_COUNT, chapter.segments.length); i++) {
+            await generateSegment(parsedBookId, parsedChapterId, i, voice);
         }
 
         // 3. Background segments
@@ -400,20 +618,22 @@ router.get('/audio/:filename', async (req: Request, res: Response) => {
         return res.status(403).send('Forbidden');
     }
 
-    const chapter = await prisma.chapter.findFirst({
-        where: { id: chapterId, bookId, book: { userId: audioAccess.userId } },
-        select: { id: true }
+    const segment = await prisma.textSegment.findFirst({
+        where: { chapterId, orderIndex: segmentIndex, chapter: { bookId, book: { userId: audioAccess.userId } } },
+        select: { content: true, role: true, orderIndex: true },
     });
-    if (!chapter) {
+    if (!segment) {
         return res.status(404).send('Not found');
     }
 
-    // Basic existence check after auth and ownership validation.
-    try {
-        await fs.access(filePath);
+    const metadataPath = resolveAudioMetadataPath(filename);
+    if (!metadataPath) {
+        return res.status(400).send('Invalid');
+    }
+
+    // Serve only if cache matches current segment content/voice.
+    if (await isSegmentAudioCached(filePath, metadataPath, segment, voice)) {
         return res.sendFile(filePath);
-    } catch {
-        // File missing
     }
 
     console.log(`[Audio] ⚠️ Cache Miss: ${filename} (Voice: ${voice}). Generating on-demand...`);

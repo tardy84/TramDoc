@@ -37,7 +37,9 @@ cd audiobook-app
 3. Tạo file `.env` dựa trên file mẫu và điền thông tin:
    - `DATABASE_URL`: Đường dẫn CSDL (SQLite mặc định: `file:./dev.db`)
    - `JWT_SECRET`: Chuỗi bí mật cho token.
-   - Các API Key cho TTS (OpenAI, Azure, Google).
+   - Các API Key cho TTS (Vbee, Azure, Google, MiniMax, Gemini).
+   - `FRONTEND_URL=https://app.your_domain.com` nếu có web client public. Có thể dùng nhiều origin, ngăn cách bằng dấu phẩy.
+   - `VBEE_CALLBACK_URL=https://your_domain.com/vbee-callback` nếu dùng Vbee production.
 4. Chạy Migration database: 
    ```bash
    npx prisma migrate dev --name init
@@ -99,5 +101,7 @@ sudo systemctl restart nginx
 
 ## 6. Lưu ý quan trọng
 - **Quyền truy cập file**: Đảm bảo thư mục `server/audio` và `server/uploads` có quyền ghi cho user chạy Node.js.
+- **iOS/TestFlight**: Client iOS phải build với `VITE_API_URL=https://your_domain.com` và backend phải có HTTPS hợp lệ; không dùng `localhost` cho bản cài trên iPhone.
+- **Persistent storage**: Với SQLite, `server/prisma/dev.db`, `server/audio` và `server/uploads` phải nằm trên volume được backup/persist sau deploy.
 - **Bảo mật**: Sử dụng SSL với Let's Encrypt (`certbot`).
 - **Backup**: Thường xuyên backup file `dev.db` nếu sử dụng SQLite.

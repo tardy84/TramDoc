@@ -24,6 +24,17 @@ const prisma = new PrismaClient({
 });
 
 const port = process.env.PORT || 3005;
+const defaultAllowedOrigins = [
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+    'capacitor://localhost',
+    'ionic://localhost'
+];
+const configuredAllowedOrigins = (process.env.FRONTEND_URL || '')
+    .split(',')
+    .map(origin => origin.trim())
+    .filter(Boolean);
+const allowedOrigins = new Set([...defaultAllowedOrigins, ...configuredAllowedOrigins]);
 
 console.log('--- Server Startup ---');
 console.log('CWD:', process.cwd());
@@ -61,8 +72,17 @@ async function checkDatabase() {
 }
 checkDatabase();
 
-// Setup App and CORS
-app.use(cors());
+// Setup App and CORS. iOS/Capacitor sends Origin: capacitor://localhost,
+// while curl/server-to-server and same-origin browser requests may omit Origin.
+app.use(cors({
+    origin(origin, callback) {
+        if (!origin || allowedOrigins.has(origin)) {
+            return callback(null, true);
+        }
+
+        return callback(new Error('Not allowed by CORS'));
+    }
+}));
 app.use(express.json());
 
 // --- STATIC FILES ---

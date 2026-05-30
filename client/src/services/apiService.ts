@@ -1,9 +1,11 @@
 import axios from 'axios';
+import { API_BASE_URL } from '../constants';
 import { Book, Bookmark } from '../types';
 
-// Centralised API Base configuration (Relying on Vite Proxy configured at /api)
+// Centralised API base. Browser dev falls back to the Vite proxy at the current origin;
+// Capacitor/iOS release builds must set VITE_API_URL to the public HTTPS API origin.
 const api = axios.create({
-    baseURL: '/api'
+    baseURL: `${API_BASE_URL}/api`
 });
 
 // Request Interceptor: Attach JWT Token if available
@@ -90,7 +92,7 @@ export const deleteBookmark = async (id: number): Promise<void> => {
 };
 
 // --- TTS Trigger API ---
-// Note: Actual streaming is handled by direct /audio/:filename src paths in HTMLAudioElement.
+// Note: Actual streaming is handled by signed /audio/:filename URLs in HTMLAudioElement.
 // This is to trigger the generation endpoint or cache verification.
 export const generateTTS = async (bookId: number, chapterId: number, voice: string): Promise<{ audioFiles: string[] }> => {
     const response = await api.post(`/books/${bookId}/chapters/${chapterId}/tts`, { voice });

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createHash } from 'node:crypto';
 import { openAsBlob } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -18,6 +19,12 @@ const voice = process.env.SMOKE_TTS_VOICE || 'vbee-n_hn_male_ngankechuyen_ytstab
 
 function assert(condition, message) {
     if (!condition) throw new Error(message);
+}
+
+function getSegmentContentHash(segment, voice) {
+    return createHash('sha256')
+        .update(JSON.stringify({ content: segment.content, role: segment.role, voice }))
+        .digest('hex');
 }
 
 async function readBody(response) {
@@ -71,11 +78,24 @@ try {
         .sort((a, b) => a.segments.length - b.segments.length)[0];
     assert(chapter, 'Uploaded fixture has no chapter with segments');
 
+    chapter.segments.sort((a, b) => a.orderIndex - b.orderIndex);
+
     const audioDir = path.resolve(serverDir, 'audio');
     await mkdir(audioDir, { recursive: true });
-    await Promise.all(chapter.segments.map((_, index) => {
-        const filePath = path.join(audioDir, `${bookId}_${chapter.id}_${voice}_${index}.mp3`);
-        return writeFile(filePath, Buffer.from([0x49, 0x44, 0x33, 0x03, 0x00]));
+    await Promise.all(chapter.segments.map((segment, index) => {
+        const fileName = `${bookId}_${chapter.id}_${voice}_${index}.mp3`;
+        const filePath = path.join(audioDir, fileName);
+        const metadataPath = `${filePath}.json`;
+        return Promise.all([
+            writeFile(filePath, Buffer.from([0x49, 0x44, 0x33, 0x03, 0x00])),
+            writeFile(metadataPath, JSON.stringify({
+                contentHash: getSegmentContentHash(segment, voice),
+                orderIndex: segment.orderIndex,
+                role: segment.role,
+                voice,
+                generatedAt: new Date().toISOString(),
+            }, null, 2)),
+        ]);
     }));
 
     const tts = await requestJson(`${apiBaseUrl}/api/books/${bookId}/chapters/${chapter.id}/tts`, {

@@ -1,4 +1,5 @@
 import React from 'react';
+import { ENABLED_TTS_VOICES } from '../../constants';
 import { ThemeMode } from './types';
 
 interface SettingsPanelProps {
@@ -71,19 +72,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
                 <div>
                     <label className="text-xs font-bold text-gray-400 uppercase tracking-widest block mb-4">Giọng đọc</label>
                     <div className="grid grid-cols-2 gap-2">
-                        {[
-                            { id: 'vbee-n_hn_male_ngankechuyen_ytstable_vc', name: 'Ngạn', provider: 'Vbee', icon: '🎧' },
-                            { id: 'vbee-s_sg_male_thientam_ytstable_vc', name: 'Thiên Tâm', provider: 'Vbee', icon: '🎤' },
-                            { id: 'vbee-n_hanoi_female_nguyetnganhannha_story_vc', name: 'Nguyệt Nga', provider: 'Vbee', icon: '🌸' },
-                            { id: 'vi-VN-Wavenet-A', name: 'Mai Chi', provider: 'Google', icon: '👩' },
-                            { id: 'vi-VN-Wavenet-B', name: 'Minh Quang', provider: 'Google', icon: '👨‍💻' },
-                            { id: 'gemini-Puck', name: 'Gemini Nam', provider: 'Google', icon: '✨', premium: true },
-                            { id: 'gemini-Aoede', name: 'Gemini Nữ', provider: 'Google', icon: '💫', premium: true },
-                            { id: 'azure-vi-VN-HoaiMyNeural', name: 'Hoài My', provider: 'Azure', icon: '🌸', premium: true },
-                            { id: 'azure-vi-VN-NamMinhNeural', name: 'Nam Minh', provider: 'Azure', icon: '👨', premium: true },
-                            // { id: 'minimax-male-qn-qingse', name: 'Thanh Phong', provider: 'MiniMax', icon: '🌊', premium: true },
-                            // { id: 'minimax-female-shaonv', name: 'Hà My', provider: 'MiniMax', icon: '🌺', premium: true }
-                        ].map(v => (
+                        {ENABLED_TTS_VOICES.map(v => (
                             <button
                                 key={v.id}
                                 onClick={() => setSelectedVoice(v.id)}
@@ -91,7 +80,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
                             >
                                 <span className="flex flex-col items-start leading-tight">
                                     <span>{v.name}</span>
-                                    <span className="text-[8px] opacity-60">{v.provider}{v.premium ? ' · Premium' : ''}</span>
+                                    <span className="text-[8px] opacity-60">{v.provider}</span>
                                 </span>
                                 <span className="text-lg">{v.icon}</span>
                             </button>

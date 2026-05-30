@@ -1,18 +1,18 @@
 /**
  * Client-side TTS Service
  * Calls Azure and Google Cloud TTS APIs directly from the app
- * API keys stored in localStorage (acceptable for personal use)
+ * API keys are read only from localStorage so production bundles do not embed secrets.
  */
 
 // ===== API Key Management =====
 
 export function getApiKeys() {
     return {
-        azureKey: import.meta.env.VITE_AZURE_SPEECH_KEY || localStorage.getItem('tts_azure_key') || '',
-        azureRegion: import.meta.env.VITE_AZURE_SPEECH_REGION || localStorage.getItem('tts_azure_region') || 'southeastasia',
-        googleKey: import.meta.env.VITE_GOOGLE_CLOUD_API_KEY || localStorage.getItem('tts_google_key') || '',
-        minimaxKey: import.meta.env.VITE_MINIMAX_API_KEY || localStorage.getItem('tts_minimax_key') || '',
-        geminiKey: import.meta.env.VITE_GEMINI_API_KEY || localStorage.getItem('tts_gemini_key') || '',
+        azureKey: localStorage.getItem('tts_azure_key') || '',
+        azureRegion: localStorage.getItem('tts_azure_region') || 'southeastasia',
+        googleKey: localStorage.getItem('tts_google_key') || '',
+        minimaxKey: localStorage.getItem('tts_minimax_key') || '',
+        geminiKey: localStorage.getItem('tts_gemini_key') || '',
     };
 }
 
@@ -282,4 +282,3 @@ async function synthesizeGemini(text: string, voice: string, signal?: AbortSigna
         return synthesizeGoogle(text, 'vi-VN-Wavenet-A');
     }
 }
-

@@ -8,6 +8,8 @@ import * as cheerio from 'cheerio';
 const parseXml = promisify(parseString);
 const prisma = new PrismaClient({});
 
+type SegmentRole = 'narrator' | 'heading';
+
 export class EpubProcessor {
     /**
      * Main method to process an uploaded EPUB file
@@ -16,16 +18,18 @@ export class EpubProcessor {
         onProgress?.(5, 'Extracting EPUB structure...');
         const zip = new AdmZip(filePath);
         const zipEntries = zip.getEntries();
+        const zipEntryMap = new Map(zipEntries.map(entry => [entry.entryName, entry]));
 
         // 1. Find and parse container.xml to locate content.opf
-        const containerEntry = zipEntries.find(e => e.entryName.endsWith('container.xml'));
+        const containerEntry = zipEntryMap.get('META-INF/container.xml') ||
+            zipEntries.find(e => e.entryName.endsWith('container.xml'));
         if (!containerEntry) throw new Error('Invalid EPUB: container.xml not found');
 
         const containerXml: any = await parseXml(containerEntry.getData().toString('utf8'));
         const rootfilePath = containerXml.container.rootfiles[0].rootfile[0].$['full-path'];
 
         // 2. Parse OPF file for metadata
-        const opfEntry = zipEntries.find(e => e.entryName === rootfilePath);
+        const opfEntry = zipEntryMap.get(rootfilePath);
         if (!opfEntry) throw new Error('content.opf not found');
         const opfXml: any = await parseXml(opfEntry.getData().toString('utf8'));
 
@@ -45,7 +49,7 @@ export class EpubProcessor {
         // 3. Extract cover image
         let coverImagePath: string | undefined;
         try {
-            coverImagePath = await this.extractCoverImage(zip, zipEntries, opfXml, path.dirname(rootfilePath));
+            coverImagePath = await this.extractCoverImage(zip, zipEntries, opfXml, path.posix.dirname(rootfilePath));
         } catch (error) {
             console.warn('[EPUB] Failed to extract cover image:', error);
         }
@@ -61,34 +65,57 @@ export class EpubProcessor {
             },
         });
 
-        // 5. Get spine (reading order)
-        const spine = opfXml.package.spine[0].itemref;
-        const manifest = opfXml.package.manifest[0].item;
+        try {
+            // 5. Get spine (reading order)
+            const spine = opfXml.package.spine[0].itemref;
+            const manifest = opfXml.package.manifest[0].item;
 
-        // 6. Process each chapter
-        const opfDir = path.dirname(rootfilePath);
-        const totalChapters = spine.length;
-        let processedChapters = 0;
+            // 6. Process each chapter
+            const opfDir = path.posix.dirname(rootfilePath);
+            const chapterTitleByHref = await this.buildChapterTitleMap(zipEntryMap, opfXml, opfDir);
+            const totalChapters = spine.length;
+            let processedChapters = 0;
 
-        for (let i = 0; i < spine.length; i++) {
-            const idref = spine[i].$.idref;
-            const manifestItem = manifest.find((item: any) => item.$.id === idref);
-            if (!manifestItem) continue;
+            for (let i = 0; i < spine.length; i++) {
+                const idref = spine[i].$.idref;
+                if (spine[i].$.linear === 'no') continue;
 
-            const chapterPath = path.posix.join(opfDir, manifestItem.$.href);
-            const chapterEntry = zipEntries.find(e => e.entryName === chapterPath);
-            if (!chapterEntry) continue;
+                const manifestItem = manifest.find((item: any) => item.$.id === idref);
+                if (!manifestItem || !this.isHtmlManifestItem(manifestItem)) continue;
 
-            const chapterHtml = chapterEntry.getData().toString('utf8');
-            const chapterTitle = this.extractChapterTitle(chapterHtml, title, author) || `Chapter ${i + 1}`;
-            const isTableOfContents = this.detectTableOfContents(chapterTitle);
+                const chapterPath = this.resolveEpubHref(opfDir, manifestItem.$.href);
+                if (!chapterPath) continue;
 
-            // Process chapter sequentially to avoid database deadlocks and maintain order
-            await this.processChapter(book.id, chapterTitle, chapterHtml, i, isTableOfContents);
+                const chapterEntry = zipEntryMap.get(chapterPath);
+                if (!chapterEntry) continue;
 
-            processedChapters++;
-            const chapterProgress = 20 + Math.floor((processedChapters / totalChapters) * 75);
-            onProgress?.(chapterProgress, `Processed ${processedChapters}/${totalChapters} chapters...`);
+                const chapterHtml = chapterEntry.getData().toString('utf8');
+                const chapterTitle = chapterTitleByHref.get(chapterPath) ||
+                    this.extractChapterTitle(chapterHtml, title, author) ||
+                    `Chapter ${i + 1}`;
+                const isTableOfContents = this.detectTableOfContents(chapterTitle);
+
+                // Process chapter sequentially to avoid database deadlocks and maintain order
+                const didCreateChapter = await this.processChapter(
+                    book.id,
+                    chapterTitle,
+                    chapterHtml,
+                    i,
+                    isTableOfContents,
+                    title,
+                    author
+                );
+                if (!didCreateChapter) continue;
+
+                processedChapters++;
+                const chapterProgress = 20 + Math.floor((processedChapters / totalChapters) * 75);
+                onProgress?.(chapterProgress, `Processed ${processedChapters}/${totalChapters} chapters...`);
+            }
+        } catch (error) {
+            await prisma.book.delete({ where: { id: book.id } }).catch((deleteError) => {
+                console.warn(`[EPUB] Failed to clean up partial book ${book.id}:`, deleteError);
+            });
+            throw error;
         }
 
         onProgress?.(100, 'Finishing up...');
@@ -136,17 +163,82 @@ export class EpubProcessor {
 
         if (!coverItem) throw new Error('Cover image not found');
 
-        const coverPath = path.posix.join(opfDir, coverItem.$.href);
-        const coverEntry = zipEntries.find(e => e.entryName === coverPath);
+        const coverPath = this.resolveEpubHref(opfDir, coverItem.$.href);
+        const entryMap = new Map(zipEntries.map(entry => [entry.entryName, entry]));
+        const coverEntry = coverPath ? entryMap.get(coverPath) : undefined;
         if (!coverEntry) throw new Error(`File not found: ${coverPath}`);
 
-        const ext = path.extname(coverItem.$.href);
+        const ext = path.extname(this.stripHrefFragmentAndQuery(coverItem.$.href));
         const fileName = `cover_${Date.now()}${ext}`;
         const savePath = path.join('uploads', 'covers', fileName);
 
         await fs.mkdir(path.dirname(savePath), { recursive: true });
         await fs.writeFile(savePath, coverEntry.getData());
         return savePath;
+    }
+
+    private async buildChapterTitleMap(
+        zipEntryMap: Map<string, AdmZip.IZipEntry>,
+        opfXml: any,
+        opfDir: string
+    ): Promise<Map<string, string>> {
+        const titleByHref = new Map<string, string>();
+        const manifest = opfXml.package.manifest[0].item || [];
+
+        const addTitle = (baseDir: string, src: string | undefined, text: string | undefined) => {
+            const cleanTitle = this.normalizeBlockText(text || '').replace(/\n+/g, ' ');
+            if (!src || !cleanTitle || cleanTitle.length > 160) return;
+
+            const href = this.resolveEpubHref(baseDir, src);
+            if (!href || titleByHref.has(href)) return;
+            titleByHref.set(href, cleanTitle);
+        };
+
+        for (const item of manifest) {
+            const href = item.$?.href;
+            const mediaType = item.$?.['media-type']?.toLowerCase();
+            const properties = item.$?.properties?.toLowerCase() || '';
+            const id = item.$?.id?.toLowerCase() || '';
+            const isNcx = mediaType === 'application/x-dtbncx+xml' || href?.toLowerCase().endsWith('.ncx') || id === 'ncx';
+            const isNav = properties.split(/\s+/).includes('nav') && this.isHtmlManifestItem(item);
+
+            const navPath = this.resolveEpubHref(opfDir, href || '');
+            if (!navPath) continue;
+            const navEntry = zipEntryMap.get(navPath);
+            if (!navEntry) continue;
+
+            try {
+                const navDir = path.posix.dirname(navPath);
+                if (isNcx) {
+                    const ncxXml: any = await parseXml(navEntry.getData().toString('utf8'));
+                    this.collectNcxNavTitles(ncxXml?.ncx?.navMap?.[0]?.navPoint || [], (src, text) => addTitle(navDir, src, text));
+                } else if (isNav) {
+                    this.collectHtmlNavTitles(navEntry.getData().toString('utf8'), (src, text) => addTitle(navDir, src, text));
+                }
+            } catch (error) {
+                console.warn(`[EPUB] Failed to parse navigation titles from ${navPath}:`, error);
+            }
+        }
+
+        return titleByHref;
+    }
+
+    private collectNcxNavTitles(navPoints: any[], addTitle: (src?: string, text?: string) => void): void {
+        for (const point of navPoints || []) {
+            addTitle(point?.content?.[0]?.$?.src, point?.navLabel?.[0]?.text?.[0]);
+            this.collectNcxNavTitles(point?.navPoint || [], addTitle);
+        }
+    }
+
+    private collectHtmlNavTitles(html: string, addTitle: (src?: string, text?: string) => void): void {
+        const $ = cheerio.load(html);
+        const tocLinks = $('nav a[href], [role="doc-toc"] a[href], [epub\\:type~="toc"] a[href]');
+        const links = tocLinks.length > 0 ? tocLinks : $('a[href]');
+
+        links.each((_, el) => {
+            const $el = $(el);
+            addTitle($el.attr('href'), $el.text());
+        });
     }
 
     /**
@@ -198,6 +290,40 @@ export class EpubProcessor {
         return ['mục lục', 'contents', 'toc', 'muc luc', '目录'].some(p => lowerTitle.includes(p));
     }
 
+    private isHtmlManifestItem(manifestItem: any): boolean {
+        const mediaType = manifestItem.$?.['media-type']?.toLowerCase();
+        if (mediaType === 'application/xhtml+xml' || mediaType === 'text/html') return true;
+
+        const href = this.stripHrefFragmentAndQuery(manifestItem.$?.href || '').toLowerCase();
+        return href.endsWith('.xhtml') || href.endsWith('.html') || href.endsWith('.htm');
+    }
+
+    private resolveEpubHref(baseDir: string, href: string): string | null {
+        const cleanHref = this.stripHrefFragmentAndQuery(href).replace(/\\/g, '/');
+        if (!cleanHref) return null;
+
+        const decodedHref = this.decodeUriSafely(cleanHref);
+        const normalized = path.posix.normalize(path.posix.join(baseDir, decodedHref));
+
+        if (normalized === '.' || normalized.startsWith('../') || path.posix.isAbsolute(normalized)) {
+            return null;
+        }
+
+        return normalized;
+    }
+
+    private stripHrefFragmentAndQuery(href: string): string {
+        return href.split('#')[0].split('?')[0].trim();
+    }
+
+    private decodeUriSafely(value: string): string {
+        try {
+            return decodeURIComponent(value);
+        } catch {
+            return value;
+        }
+    }
+
     /**
      * Process a single chapter: extract semantic segments using Cheerio
      */
@@ -206,12 +332,17 @@ export class EpubProcessor {
         chapterTitle: string,
         html: string,
         chapterIndex: number,
-        isTableOfContents: boolean = false
-    ): Promise<void> {
-        const $ = cheerio.load(html);
-
-        // Remove noise
-        $('script, style, link, iFrame, img, aside, nav').remove();
+        isTableOfContents: boolean,
+        bookTitle: string,
+        author?: string
+    ): Promise<boolean> {
+        const { segmentTexts, segmentRoles } = this.extractSegments(html, chapterTitle, bookTitle, author);
+        if (isTableOfContents || this.isTableOfContentsDocument(segmentTexts)) {
+            return false;
+        }
+        if (this.isLowValueReadingDocument(segmentTexts, segmentRoles, bookTitle, author)) {
+            return false;
+        }
 
         const chapter = await prisma.chapter.create({
             data: {
@@ -222,41 +353,248 @@ export class EpubProcessor {
             },
         });
 
-        const segmentTexts: string[] = [];
-        const segmentRoles: ('narrator' | 'heading')[] = [];
+        const segmentData = segmentTexts.map((content, i) => ({
+            content,
+            role: segmentRoles[i] as any,
+            chapterId: chapter.id,
+            orderIndex: i,
+        }));
 
-        // Iterate through all "content" elements in order
-        $('body').find('h1, h2, h3, h4, h5, h6, p, div').each((_, el) => {
+        await prisma.textSegment.createMany({
+            data: segmentData,
+        });
+
+        return true;
+    }
+
+    private extractSegments(
+        html: string,
+        chapterTitle: string,
+        bookTitle: string,
+        author?: string
+    ): { segmentTexts: string[]; segmentRoles: SegmentRole[] } {
+        const $ = cheerio.load(html);
+
+        // Remove noise
+        $('script, style, link, iFrame, iframe, img, svg, audio, video, aside, nav').remove();
+        $('[class], [id], [role], [aria-label], [epub\\:type]').filter((_, el) => {
             const $el = $(el);
-            const isHeading = $el.is('h1, h2, h3, h4');
+            const marker = [
+                $el.attr('class'),
+                $el.attr('id'),
+                $el.attr('role'),
+                $el.attr('aria-label'),
+                $el.attr('epub:type'),
+            ].filter(Boolean).join(' ').toLowerCase();
 
-            // Skip if it's a container that has child paragraphs (avoid duplication)
-            if ($el.is('div') && $el.find('p, div').length > 0) return;
+            return /\b(pagebreak|page-break|pagenum|page-num|page_number|footnote|endnote|noteref|nav|navigation|toc|aside|decorative)\b/.test(marker);
+        }).remove();
+        $('br').replaceWith('\n');
 
-            let text = $el.text().trim().replace(/\s+/g, ' ');
+        const segmentTexts: string[] = [];
+        const segmentRoles: SegmentRole[] = [];
+        const semanticSelector = 'h1, h2, h3, h4, h5, h6, p, li, blockquote';
+        const semanticBlocks = $('body').find(semanticSelector);
+        const leafDivBlocks = $('body').find('div').filter((_, el) =>
+            $(el).find('div, h1, h2, h3, h4, h5, h6, p, li, blockquote').length === 0
+        );
+        const semanticTextLength = semanticBlocks.toArray()
+            .map(el => this.normalizeBlockText($(el).text()).length)
+            .reduce((total, length) => total + length, 0);
+        const leafDivTextLength = leafDivBlocks.toArray()
+            .map(el => this.normalizeBlockText($(el).text()).length)
+            .reduce((total, length) => total + length, 0);
+        const blocks = semanticBlocks.length === 0 || (semanticTextLength < 300 && leafDivTextLength > semanticTextLength)
+            ? semanticBlocks.add(leafDivBlocks)
+            : semanticBlocks;
+
+        blocks.each((_, el) => {
+            const $el = $(el);
+            const isHeading = $el.is('h1, h2, h3, h4, h5, h6');
+
+            // Skip semantic containers with nested semantic content to avoid duplicate text.
+            if ($el.is('li, blockquote') && $el.find(semanticSelector).length > 0) return;
+
+            const text = this.normalizeBlockText($el.text());
             if (!text || text.length < 2) return;
+            if (this.isDecorativeSeparator(text)) return;
 
-            // Split long paragraphs into smaller segments
-            const sentences = this.splitIntoSentences(text);
+            const textParts = text.split(/\n+/).map(part => part.trim()).filter(Boolean);
 
-            sentences.forEach((s) => {
-                segmentTexts.push(s);
-                segmentRoles.push(isHeading ? 'heading' : 'narrator');
+            textParts.forEach((part) => {
+                if (this.isDecorativeSeparator(part)) return;
+
+                this.splitIntoSentences(part).forEach((s) => {
+                    if (this.isDecorativeSeparator(s)) return;
+                    if (this.isBookMetadataText(s, bookTitle, author)) return;
+                    segmentTexts.push(s);
+                    segmentRoles.push(isHeading ? 'heading' : 'narrator');
+                });
             });
         });
 
-        if (segmentTexts.length > 0) {
-            const segmentData = segmentTexts.map((content, i) => ({
-                content,
-                role: segmentRoles[i] as any,
-                chapterId: chapter.id,
-                orderIndex: i,
-            }));
+        return this.deduplicateRepeatedShortNoise(segmentTexts, segmentRoles, chapterTitle, bookTitle, author);
+    }
 
-            await prisma.textSegment.createMany({
-                data: segmentData,
-            });
+    private normalizeBlockText(text: string): string {
+        return text
+            .replace(/\u00a0/g, ' ')
+            .replace(/\r\n?/g, '\n')
+            .replace(/[ \t\f\v]+/g, ' ')
+            .replace(/[ \t]*\n[ \t]*/g, '\n')
+            .replace(/\n{3,}/g, '\n\n')
+            .trim();
+    }
+
+    private isDecorativeSeparator(text: string): boolean {
+        const normalized = text.trim();
+        if (!normalized) return true;
+        if (/^(?:[-–—_*~•·\s]){3,}$/.test(normalized)) return true;
+        if (/^(?:[-–—_*~•·\s]*o+[-–—_*~•·\s]*){2,}$/i.test(normalized)) return true;
+        return false;
+    }
+
+    private deduplicateRepeatedShortNoise(
+        segmentTexts: string[],
+        segmentRoles: SegmentRole[],
+        chapterTitle: string,
+        bookTitle: string,
+        author?: string
+    ): { segmentTexts: string[]; segmentRoles: SegmentRole[] } {
+        const counts = new Map<string, number>();
+        const seen = new Set<string>();
+        const normalizedChapterTitle = this.normalizeForComparison(chapterTitle);
+
+        segmentTexts.forEach((text) => {
+            const normalized = this.normalizeForComparison(text);
+            if (this.isShortDedupCandidate(text, normalized, normalizedChapterTitle)) {
+                counts.set(normalized, (counts.get(normalized) || 0) + 1);
+            }
+        });
+
+        const dedupedTexts: string[] = [];
+        const dedupedRoles: SegmentRole[] = [];
+
+        segmentTexts.forEach((text, index) => {
+            const role = segmentRoles[index];
+            const normalized = this.normalizeForComparison(text);
+            const count = counts.get(normalized) || 0;
+            const isRepeatedNoise = count > 1 && (
+                this.isBookMetadataText(text, bookTitle, author) ||
+                (count >= 3 && role !== 'heading')
+            );
+
+            if (isRepeatedNoise) {
+                if (seen.has(normalized)) return;
+                seen.add(normalized);
+            }
+
+            dedupedTexts.push(text);
+            dedupedRoles.push(role);
+        });
+
+        return { segmentTexts: dedupedTexts, segmentRoles: dedupedRoles };
+    }
+
+    private isShortDedupCandidate(text: string, normalizedText: string, normalizedChapterTitle: string): boolean {
+        if (!normalizedText || text.length > 80) return false;
+        if (normalizedText === normalizedChapterTitle) return false;
+        if (/^(chuong|chapter|phan|loi|hoi|muc)\b/.test(normalizedText)) return false;
+        return true;
+    }
+
+    private isLowValueReadingDocument(
+        segmentTexts: string[],
+        segmentRoles: SegmentRole[],
+        bookTitle: string,
+        author?: string
+    ): boolean {
+        if (segmentTexts.length === 0) return true;
+        if (this.isPromotionalDocument(segmentTexts)) return true;
+        if (this.isPublicationMetadataDocument(segmentTexts)) return true;
+        if (segmentTexts.length > 8) return false;
+
+        const nonMetaSegments = segmentTexts
+            .map((text, index) => ({ text, role: segmentRoles[index] }))
+            .filter(({ text }) => !this.isBookMetadataText(text, bookTitle, author));
+        const nonMetaNarratorChars = nonMetaSegments
+            .filter(({ role }) => role === 'narrator')
+            .reduce((total, { text }) => total + text.length, 0);
+
+        if (nonMetaSegments.length === 0) return true;
+        if (nonMetaSegments.reduce((total, { text }) => total + text.length, 0) < 80 && nonMetaNarratorChars === 0) {
+            return true;
         }
+
+        return false;
+    }
+
+    private isPromotionalDocument(segmentTexts: string[]): boolean {
+        const normalizedStart = this.normalizeForComparison(segmentTexts.slice(0, 12).join(' '));
+        return [
+            'chao mung cac ban don doc dau sach tu du an sach cho thiet bi di dong',
+            'thong tin ebook',
+            'thank you for downloading this simon schuster ebook',
+            'get a free ebook when you join our mailing list',
+            'click here to sign up',
+            'vh project',
+            'du an che ban ebook',
+            'ebook duoc thuc hien boi',
+            'thu vien ebook',
+        ].some(phrase => normalizedStart.includes(phrase));
+    }
+
+    private isPublicationMetadataDocument(segmentTexts: string[]): boolean {
+        if (segmentTexts.length > 8) return false;
+
+        const normalizedStart = this.normalizeForComparison(segmentTexts.join(' '));
+        const hasPublisherMarker = [
+            'nha xuat ban',
+            'cong ty van hoa truyen thong',
+            'all rights reserved',
+            'copyright',
+            'isbn',
+        ].some(phrase => normalizedStart.includes(phrase));
+        if (!hasPublisherMarker) return false;
+
+        const proseLikeSegments = segmentTexts.filter(text =>
+            text.length >= 120 && /[.!?…]["'”’)\]]?$/.test(text.trim())
+        );
+        return proseLikeSegments.length === 0;
+    }
+
+    private isTableOfContentsDocument(segmentTexts: string[]): boolean {
+        const firstSegment = this.normalizeForComparison(segmentTexts[0] || '');
+        return firstSegment === 'muc luc' || firstSegment === 'contents' || firstSegment === 'table of contents';
+    }
+
+    private isBookMetadataText(text: string, bookTitle: string, author?: string): boolean {
+        const normalizedText = this.normalizeForComparison(text);
+        const normalizedTitle = this.normalizeForComparison(bookTitle);
+        const normalizedAuthor = author ? this.normalizeForComparison(author) : '';
+
+        if (!normalizedText) return true;
+        if (normalizedText === normalizedTitle || normalizedText === normalizedAuthor) return true;
+        if (normalizedTitle && normalizedText.replaceAll(normalizedTitle, '').trim().length === 0) return true;
+        if (normalizedAuthor && normalizedText.replaceAll(normalizedAuthor, '').trim().length === 0) return true;
+
+        if (['cover', 'title page', 'bia sach', 'trang bia'].includes(normalizedText)) return true;
+        return [
+            'ebook mien phi tai',
+            'sachvui com',
+        ].some(phrase => normalizedText.includes(phrase));
+    }
+
+    private normalizeForComparison(value: string): string {
+        return value
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .replace(/đ/g, 'd')
+            .replace(/Đ/g, 'D')
+            .toLowerCase()
+            .replace(/[^a-z0-9\s]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
     }
 
     /**
@@ -264,52 +602,110 @@ export class EpubProcessor {
      * Target chunk size is ~300 characters for optimal TTS naturalness and UX latency.
      */
     private splitIntoSentences(text: string): string[] {
-        // Improved Regex: Handles punctuation followed by optional closing quotes/brackets
-        const sentenceRegex = /[^.!?]+[.!?]+["'”’]?/g;
-        const matches = text.match(sentenceRegex);
+        const sentences = this.extractSentenceUnits(text)
+            .flatMap(sentence => this.hardSplitLongSentence(sentence));
 
-        if (!matches || matches.length === 0) return [text.trim()];
-
-        const sentences = matches
-            .map(s => s.trim())
-            .filter(s => s.length > 0)
-            .reduce((acc, curr) => {
-                // If a "sentence" is too long (e.g. 600+ chars), split it by comma as a last resort
-                if (curr.length > 600) {
-                    const parts = curr.split(/[,;]/).map(p => p.trim()).filter(p => p.length > 0);
-                    return [...acc, ...parts];
-                }
-                return [...acc, curr];
-            }, [] as string[]);
-
-        // Smart Chunking: Group sentences into chunks of approx 300 characters max
-        const MAX_CHUNK_LENGTH = 300;
+        const MIN_CHUNK_LENGTH = 220;
+        const MAX_CHUNK_LENGTH = 420;
         const chunks: string[] = [];
         let currentChunk = '';
 
         for (const sentence of sentences) {
-            // First sentence in a chunk
             if (!currentChunk) {
                 currentChunk = sentence;
                 continue;
             }
 
-            // Check if adding this sentence exceeds the preferred limit
             if (currentChunk.length + sentence.length + 1 > MAX_CHUNK_LENGTH) {
-                // Current chunk is long enough, push it and start a new one
                 chunks.push(currentChunk.trim());
                 currentChunk = sentence;
             } else {
-                // Add to current chunk with a space
                 currentChunk += ' ' + sentence;
+            }
+
+            if (currentChunk.length >= MIN_CHUNK_LENGTH && /[.!?…]["'”’)\]]?$/.test(currentChunk)) {
+                chunks.push(currentChunk.trim());
+                currentChunk = '';
             }
         }
 
-        // Push the last remaining chunk
         if (currentChunk) {
             chunks.push(currentChunk.trim());
         }
 
+        return chunks;
+    }
+
+    private extractSentenceUnits(text: string): string[] {
+        const normalized = text.trim().replace(/\s+/g, ' ');
+        if (!normalized) return [];
+
+        const sentences: string[] = [];
+        let start = 0;
+
+        for (let i = 0; i < normalized.length; i++) {
+            if (!'.!?…'.includes(normalized[i])) continue;
+            if (normalized[i] === '.' && this.isProtectedAbbreviation(normalized, i)) continue;
+
+            let end = i + 1;
+            while (end < normalized.length && /["'”’)\]]/.test(normalized[end])) {
+                end++;
+            }
+
+            const next = normalized[end];
+            if (next && !/\s/.test(next)) continue;
+
+            const sentence = normalized.slice(start, end).trim();
+            if (sentence) sentences.push(sentence);
+            start = end;
+        }
+
+        const remainder = normalized.slice(start).trim();
+        if (remainder) sentences.push(remainder);
+
+        return sentences;
+    }
+
+    private isProtectedAbbreviation(text: string, periodIndex: number): boolean {
+        const prefix = text.slice(0, periodIndex + 1);
+        const abbreviationPatterns = [
+            /\bv\.v\.$/i,
+            /\bTS\.$/,
+            /\bThS\.$/,
+            /\bGS\.$/,
+            /\bPGS\.$/,
+            /\bTP\.HCM\.$/,
+            /\bDr\.$/,
+            /\bMr\.$/,
+        ];
+
+        return abbreviationPatterns.some(pattern => pattern.test(prefix));
+    }
+
+    private hardSplitLongSentence(sentence: string): string[] {
+        const HARD_LIMIT = 700;
+        if (sentence.length <= HARD_LIMIT) return [sentence];
+
+        const chunks: string[] = [];
+        let remaining = sentence.trim();
+
+        while (remaining.length > HARD_LIMIT) {
+            const window = remaining.slice(0, HARD_LIMIT);
+            const splitIndex = Math.max(
+                window.lastIndexOf(','),
+                window.lastIndexOf(';'),
+                window.lastIndexOf(':'),
+                window.lastIndexOf(' - '),
+                window.lastIndexOf(' – '),
+                window.lastIndexOf(' — ')
+            );
+            const safeSplitIndex = splitIndex > 220 ? splitIndex + 1 : HARD_LIMIT;
+
+            chunks.push(remaining.slice(0, safeSplitIndex).trim());
+            remaining = remaining.slice(safeSplitIndex).trim();
+        }
+
+        if (remaining) chunks.push(remaining);
         return chunks;
     }
 }

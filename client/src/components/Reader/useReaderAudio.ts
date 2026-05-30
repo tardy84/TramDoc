@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { Chapter } from './types';
 import { generateTTS } from '../../services/apiService';
-import { synthesize, hasApiKeys } from '../../services/ttsService';
+import { resolveApiUrl } from '../../constants';
 import { isAbortError } from '../../utils/errors';
 
 
@@ -48,6 +48,16 @@ export const useReaderAudio = ({
     // Map of segment index -> URL for current chapter
     const activeUrlMapRef = useRef<Map<number, string>>(new Map());
 
+    const stopAudioPlayback = useCallback((message: string, error?: unknown) => {
+        if (error) {
+            console.error(message, error);
+        } else {
+            console.error(message);
+        }
+        setBrowserTTSMode(false);
+        setIsPlaying(false);
+    }, []);
+
     const playBrowserTTS = useCallback((index: number) => {
         const chapter = chapters[currentChapterIndex];
         if (!chapter || !chapter.segments[index]) return;
@@ -62,15 +72,6 @@ export const useReaderAudio = ({
             setGlobalAudio(null);
         }
 
-        const queueNext = (currIdx: number) => {
-            for (let i = 1; i <= 3; i++) {
-                const nextIdx = currIdx + i;
-                if (nextIdx < chapter.segments.length && !queuedIndicesRef.current.has(nextIdx)) {
-                    playBrowserTTS(nextIdx);
-                }
-            }
-        };
-
         if (queuedIndicesRef.current.has(index)) return;
 
         const utterance = new SpeechSynthesisUtterance(chapter.segments[index].content);
@@ -80,12 +81,13 @@ export const useReaderAudio = ({
         utterance.onstart = () => {
             setIsPlaying(true);
             setCurrentSegmentIndex(index);
-            queueNext(index);
         };
 
         utterance.onend = () => {
             queuedIndicesRef.current.delete(index);
-            if (index + 1 === chapter.segments.length) {
+            if (index + 1 < chapter.segments.length) {
+                playBrowserTTS(index + 1);
+            } else {
                 nextChapter();
             }
         };
@@ -121,7 +123,7 @@ export const useReaderAudio = ({
             }
 
             if (!url) return null;
-            const audio = new Audio(url);
+            const audio = new Audio(resolveApiUrl(url));
             audio.playbackRate = playbackSpeed;
             audio.preload = 'auto';
             return audio;
@@ -135,7 +137,7 @@ export const useReaderAudio = ({
             // BEFORE creating the audio element wait. This circumvents slow audio tag initialization.
             const url = activeUrlMapRef.current.get(idx) || ( _files ? _files[idx] : null);
             if (url) {
-                fetch(url).catch(() => {});
+                fetch(resolveApiUrl(url)).catch(() => {});
             }
 
             const nextAudio = await getAudioForIndex(idx);
@@ -184,8 +186,7 @@ export const useReaderAudio = ({
                 }, 500);
                 return;
             }
-            setBrowserTTSMode(true);
-            playBrowserTTS(index);
+            stopAudioPlayback('[Audio] Không tìm thấy URL audio sau khi đổi giọng.');
             return;
         }
 
@@ -201,8 +202,7 @@ export const useReaderAudio = ({
                     }
                 }, 500);
             } else {
-                setBrowserTTSMode(true);
-                playBrowserTTS(index);
+                stopAudioPlayback('[Audio] Không phát được audio Vbee sau nhiều lần thử.');
             }
         };
 
@@ -238,8 +238,7 @@ export const useReaderAudio = ({
                     }
                 }, 500);
             } else {
-                setBrowserTTSMode(true);
-                playBrowserTTS(index);
+                stopAudioPlayback('[Audio] Trình phát audio từ chối phát Vbee sau nhiều lần thử.', error);
             }
         });
 
@@ -250,120 +249,10 @@ export const useReaderAudio = ({
             preloadNext(index + 1);
         }
 
-    }, [audioFiles, chapters, currentChapterIndex, nextChapter, playbackSpeed, playBrowserTTS, setCurrentSegmentIndex, getGlobalAudio, setGlobalAudio]);
-
-    // Returns true for voices that require client-side API keys (Azure, MiniMax, Gemini)
-    const isClientSideVoice = useCallback((voice: string): boolean => {
-        return voice.startsWith('azure-') || voice.startsWith('minimax-') || voice.startsWith('gemini-');
-    }, []);
-
-    // Client-side TTS: synthesizes audio using localStorage API keys, plays sequentially
-    const generateClientSideAudio = useCallback(async (startFromIndex?: number) => {
-        if (chapters.length === 0) return;
-        const chapter = chapters[currentChapterIndex];
-        const chapterId = chapter.id;
-        activeChapterIdRef.current = chapterId;
-
-        if (abortControllerRef.current) abortControllerRef.current.abort();
-        const controller = new AbortController();
-        abortControllerRef.current = controller;
-
-        window.speechSynthesis.cancel();
-        queuedIndicesRef.current.clear();
-        preloadAudioRef.current = null;
-        nextAudioIndexRef.current = null;
-
-        const currentGlobal = getGlobalAudio();
-        if (currentGlobal) {
-            currentGlobal.pause();
-            currentGlobal.src = '';
-            setGlobalAudio(null);
-        }
-
-        setGenerating(true);
-        setBrowserTTSMode(false);
-
-        if (!hasApiKeys(selectedVoice)) {
-            console.warn('[ClientTTS] No API key for voice:', selectedVoice, '— falling back to browser TTS');
-            setGenerating(false);
-            setBrowserTTSMode(true);
-            playBrowserTTS(typeof startFromIndex === 'number' ? startFromIndex : currentSegmentIndex);
-            return;
-        }
-
-        // Track blob URLs to revoke on cleanup
-        const blobUrls: string[] = [];
-        const blobUrlMap = new Map<number, string>();
-
-        // Pre-synthesize first segment immediately so playback starts fast
-        const targetIndex = typeof startFromIndex === 'number' ? startFromIndex : currentSegmentIndex;
-
-        try {
-            if (controller.signal.aborted || activeChapterIdRef.current !== chapterId) return;
-
-            // Synthesize the first (target) segment and start playing
-            const firstBlob = await synthesize(chapter.segments[targetIndex]?.content || '', selectedVoice, controller.signal);
-            if (controller.signal.aborted || activeChapterIdRef.current !== chapterId) return;
-
-            const firstUrl = URL.createObjectURL(firstBlob);
-            blobUrls.push(firstUrl);
-            blobUrlMap.set(targetIndex, firstUrl);
-
-            // Fill activeUrlMapRef so playAudio can find the URL
-            activeUrlMapRef.current.clear();
-            activeUrlMapRef.current.set(targetIndex, firstUrl);
-
-            // Build placeholder array (null = not yet synthesized)
-            const placeholderUrls = Array.from({ length: chapter.segments.length }, (_, i) =>
-                i === targetIndex ? firstUrl : ''
-            );
-            setAudioFiles(placeholderUrls);
-            setChapters(prev => prev.map((c, idx) => idx === currentChapterIndex ? { ...c, audioFiles: placeholderUrls } : c));
-
-            setGenerating(false);
-            playAudio(targetIndex, placeholderUrls);
-
-            // Background: synthesize remaining segments and update URL map as they arrive
-            (async () => {
-                for (let i = 0; i < chapter.segments.length; i++) {
-                    if (i === targetIndex) continue;
-                    if (controller.signal.aborted || activeChapterIdRef.current !== chapterId) break;
-                    try {
-                        const blob = await synthesize(chapter.segments[i]?.content || '', selectedVoice, controller.signal);
-                        if (controller.signal.aborted || activeChapterIdRef.current !== chapterId) break;
-                        const url = URL.createObjectURL(blob);
-                        blobUrls.push(url);
-                        blobUrlMap.set(i, url);
-                        activeUrlMapRef.current.set(i, url);
-                    } catch (err) {
-                        if (!isAbortError(err)) {
-                            console.error('[ClientTTS] Failed segment', i, err);
-                        }
-                    }
-                }
-            })();
-
-        } catch (error) {
-            if (isAbortError(error) || controller.signal.aborted) return;
-            console.error('[ClientTTS] Error:', error);
-            setGenerating(false);
-            setBrowserTTSMode(true);
-            playBrowserTTS(targetIndex);
-        } finally {
-            if (activeChapterIdRef.current === chapterId) {
-                setGenerating(false);
-                abortControllerRef.current = null;
-            }
-        }
-    }, [chapters, currentChapterIndex, currentSegmentIndex, playAudio, playBrowserTTS, setChapters, selectedVoice, getGlobalAudio, setGlobalAudio]);
+    }, [audioFiles, chapters, currentChapterIndex, nextChapter, playbackSpeed, stopAudioPlayback, setCurrentSegmentIndex, getGlobalAudio, setGlobalAudio]);
 
     const generateAudio = useCallback(async (startFromIndex?: number) => {
         if (chapters.length === 0) return;
-
-        // Route client-keyed voices (Azure, MiniMax, Gemini) to client-side synthesis
-        if (isClientSideVoice(selectedVoice)) {
-            return generateClientSideAudio(startFromIndex);
-        }
 
         const chapter = chapters[currentChapterIndex];
         activeChapterIdRef.current = chapter.id;
@@ -409,16 +298,15 @@ export const useReaderAudio = ({
         } catch (error) {
             if (isAbortError(error) || controller.signal.aborted) return;
             console.error('[TTS] Server API Error:', error);
-            setBrowserTTSMode(true);
             setGenerating(false);
-            playBrowserTTS(typeof startFromIndex === 'number' ? startFromIndex : currentSegmentIndex);
+            stopAudioPlayback('[TTS] Không tạo được audio Vbee từ server.', error);
         } finally {
             if (activeChapterIdRef.current === chapter.id) {
                 setGenerating(false);
                 abortControllerRef.current = null;
             }
         }
-    }, [bookId, chapters, currentChapterIndex, currentSegmentIndex, playAudio, playBrowserTTS, setChapters, selectedVoice, getGlobalAudio, setGlobalAudio, isClientSideVoice, generateClientSideAudio]);
+    }, [bookId, chapters, currentChapterIndex, currentSegmentIndex, playAudio, setChapters, selectedVoice, getGlobalAudio, setGlobalAudio, stopAudioPlayback]);
 
     const togglePlayPause = useCallback(() => {
         if (browserTTSMode) {

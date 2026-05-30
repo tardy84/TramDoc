@@ -15,6 +15,7 @@ import { useReaderProgress } from './Reader/useReaderProgress';
 
 // Local database
 import { getBook, getBookmarks, createBookmark, deleteBookmark as deleteBookmarkApi } from '../services/apiService';
+import { DEFAULT_TTS_VOICE, isEnabledTtsVoice, resolveApiUrl } from '../constants';
 import { getErrorMessage } from '../utils/errors';
 
 const THEMES: Record<ThemeMode, ThemeStyles> = {
@@ -77,6 +78,16 @@ interface BookReaderProps {
     onClose: () => void;
 }
 
+const getInitialReaderVoice = () => {
+    const storedVoice = localStorage.getItem('reader_voice');
+    if (storedVoice && isEnabledTtsVoice(storedVoice)) {
+        return storedVoice;
+    }
+
+    localStorage.setItem('reader_voice', DEFAULT_TTS_VOICE);
+    return DEFAULT_TTS_VOICE;
+};
+
 export default function BookReader({ bookId, onClose }: BookReaderProps) {
     const [book, setBook] = useState<Book | null>(null);
     const [chapters, setChapters] = useState<Chapter[]>([]);
@@ -99,7 +110,7 @@ export default function BookReader({ bookId, onClose }: BookReaderProps) {
     const [fontFamily, setFontFamily] = useState('noto');
     const [playbackSpeed, setPlaybackSpeed] = useState(1);
     const [sleepTimer, setSleepTimer] = useState<number | null>(null);
-    const [selectedVoice, setSelectedVoice] = useState(() => localStorage.getItem('reader_voice') || 'vbee-n_hn_male_ngankechuyen_ytstable_vc');
+    const [selectedVoice, setSelectedVoice] = useState(getInitialReaderVoice);
 
     // Content & Bookmarks
     const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
@@ -305,7 +316,7 @@ export default function BookReader({ bookId, onClose }: BookReaderProps) {
                         {currentChapter.orderIndex === 0 && book && (
                             <div className="bg-white/10 backdrop-blur-md rounded-3xl p-8 border border-white/20 flex flex-col items-center justify-center mb-12 animate-in fade-in zoom-in duration-700">
                                 <div className="relative w-48 h-72 rounded-2xl shadow-2xl mb-6 overflow-hidden transform hover:scale-105 transition-transform duration-500">
-                                    <img src={book.coverImageUrl || '/default-cover.png'} className="w-full h-full object-cover" alt="" />
+                                    <img src={resolveApiUrl(book.coverImageUrl, '/default-cover.png')} className="w-full h-full object-cover" alt="" />
                                     {!book.coverImageUrl && (
                                         <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center z-10 pointer-events-none">
                                             <div className="absolute inset-0 bg-black/40" />
@@ -400,8 +411,9 @@ export default function BookReader({ bookId, onClose }: BookReaderProps) {
                 setSleepTimer={setSleepTimer}
                 selectedVoice={selectedVoice}
                 setSelectedVoice={(voice) => {
-                    setSelectedVoice(voice);
-                    localStorage.setItem('reader_voice', voice);
+                    const safeVoice = isEnabledTtsVoice(voice) ? voice : DEFAULT_TTS_VOICE;
+                    setSelectedVoice(safeVoice);
+                    localStorage.setItem('reader_voice', safeVoice);
                 }}
             />
 
