@@ -53,22 +53,24 @@ router.post('/login', async (req, res) => {
             return res.status(400).json({ error: 'Tên đăng nhập hoặc mật khẩu không hợp lệ' });
         }
 
-        const envUser = process.env.ADMIN_USERNAME;
-        const envPass = process.env.ADMIN_PASSWORD;
+        const envUser = process.env.ADMIN_USERNAME?.trim();
+        const envPass = process.env.ADMIN_PASSWORD?.trim();
         if (!envUser || !envPass) {
             return res.status(503).json({ error: 'Đăng nhập chưa được cấu hình' });
         }
 
-        const validCredentials = username === envUser && password === envPass;
+        const normalizedUsername = username.trim();
+        const normalizedPassword = password.trim();
+        const validCredentials = normalizedUsername === envUser && normalizedPassword === envPass;
         if (validCredentials) {
             loginAttempts.delete(rateLimitKey);
-            const passwordHash = await bcrypt.hash(password, 10);
+            const passwordHash = await bcrypt.hash(normalizedPassword, 10);
 
             // Upsert User ID 1 to ensure referential integrity for uploads and books
             const user = await prisma.user.upsert({
                 where: { id: 1 },
-                update: { email: username, passwordHash, role: 'ADMIN', name: 'Admin' },
-                create: { id: 1, email: username, passwordHash, role: 'ADMIN', name: 'Admin' }
+                update: { email: normalizedUsername, passwordHash, role: 'ADMIN', name: 'Admin' },
+                create: { id: 1, email: normalizedUsername, passwordHash, role: 'ADMIN', name: 'Admin' }
             });
 
             const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '30d' });
