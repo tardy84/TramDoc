@@ -6,6 +6,7 @@ interface ReaderControlsProps {
     theme: ThemeMode;
     isPlaying: boolean;
     generating: boolean;
+    audioError?: string | null;
     audioFiles: string[];
     playbackSpeed: number;
     currentChapterIndex: number;
@@ -27,6 +28,7 @@ const ReaderControls: React.FC<ReaderControlsProps> = ({
     theme,
     isPlaying,
     generating,
+    audioError,
     audioFiles,
     playbackSpeed,
     currentChapterIndex,
@@ -45,6 +47,11 @@ const ReaderControls: React.FC<ReaderControlsProps> = ({
     return (
         <div className={`fixed bottom-0 left-0 right-0 z-50 transition-transform duration-500 ease-in-out transform ${showControls ? 'translate-y-0' : 'translate-y-full'}`}>
             <div className="container mx-auto max-w-2xl px-4 pb-8">
+                {audioError && (
+                    <div className="mb-3 rounded-2xl border border-red-400/20 bg-red-500/15 px-4 py-3 text-sm font-semibold text-red-100 shadow-xl backdrop-blur-2xl">
+                        {audioError}
+                    </div>
+                )}
                 <div className={`backdrop-blur-3xl border p-6 rounded-[40px] shadow-2xl ${currentThemeStyles.header}`}>
                     <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-1 md:gap-3">

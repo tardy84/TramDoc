@@ -48,6 +48,14 @@ async function checkInfoPlist() {
     assert(Array.isArray(plist['UISupportedInterfaceOrientations~ipad']) && plist['UISupportedInterfaceOrientations~ipad'].length >= 4, 'iPad orientations should stay fully supported');
 }
 
+async function checkCapacitorConfig() {
+    const config = await readJson(path.join(iosAppDir, 'capacitor.config.json'));
+    assert(config.appId === 'com.tramdoc.app', 'Capacitor appId must be com.tramdoc.app');
+    assert(config.appName === 'Trạm Đọc', 'Capacitor appName must be Trạm Đọc');
+    assert(!config.server?.url, 'Release iOS config must not include a dev server URL');
+    assert(config.server?.cleartext !== true, 'Release iOS config must not allow cleartext traffic');
+}
+
 async function checkAppIcons() {
     await readJson(path.join(assetsDir, 'Contents.json'));
     const iconDir = path.join(assetsDir, 'AppIcon.appiconset');
@@ -88,6 +96,7 @@ async function checkSplash() {
 }
 
 await checkInfoPlist();
+await checkCapacitorConfig();
 await checkAppIcons();
 await checkSplash();
 console.log('iOS native checks passed.');

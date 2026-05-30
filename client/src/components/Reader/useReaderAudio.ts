@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { Chapter } from './types';
 import { generateTTS } from '../../services/apiService';
 import { resolveApiUrl } from '../../constants';
-import { isAbortError } from '../../utils/errors';
+import { getErrorMessage, isAbortError } from '../../utils/errors';
 
 
 interface UseReaderAudioProps {
@@ -35,6 +35,7 @@ export const useReaderAudio = ({
     const [isPlaying, setIsPlaying] = useState(false);
     const [generating, setGenerating] = useState(false);
     const [audioFiles, setAudioFiles] = useState<string[]>([]);
+    const [audioError, setAudioError] = useState<string | null>(null);
     const [browserTTSMode, setBrowserTTSMode] = useState(false);
 
     const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -54,6 +55,7 @@ export const useReaderAudio = ({
         } else {
             console.error(message);
         }
+        setAudioError(message.replace(/^\[[^\]]+\]\s*/, ''));
         setBrowserTTSMode(false);
         setIsPlaying(false);
     }, []);
@@ -104,6 +106,7 @@ export const useReaderAudio = ({
 
         const currentPlayId = incomingPlayId ?? ++playIdRef.current;
         activeChapterIdRef.current = chapterId;
+        setAudioError(null);
         setCurrentSegmentIndex(index);
 
         const getAudioForIndex = async (idx: number): Promise<HTMLAudioElement | null> => {
@@ -202,7 +205,7 @@ export const useReaderAudio = ({
                     }
                 }, 500);
             } else {
-                stopAudioPlayback('[Audio] Không phát được audio Vbee sau nhiều lần thử.');
+                stopAudioPlayback(`[Audio] Không phát được audio Vbee ở đoạn ${index + 1}. Kiểm tra API/audio URL rồi thử lại.`);
             }
         };
 
@@ -238,7 +241,7 @@ export const useReaderAudio = ({
                     }
                 }, 500);
             } else {
-                stopAudioPlayback('[Audio] Trình phát audio từ chối phát Vbee sau nhiều lần thử.', error);
+                stopAudioPlayback(`[Audio] Trình phát từ chối phát Vbee ở đoạn ${index + 1}. Hãy thử bấm phát lại.`, error);
             }
         });
 
@@ -274,12 +277,14 @@ export const useReaderAudio = ({
         }
 
         setGenerating(true);
+        setAudioError(null);
         setBrowserTTSMode(false);
 
         try {
+            const targetIndex = typeof startFromIndex === 'number' ? startFromIndex : currentSegmentIndex;
             // Ask the server for signed, short-lived audio URLs. This avoids exposing
             // the long-lived login JWT in media URLs while still enabling <audio> playback.
-            const { audioFiles: urls } = await generateTTS(bookId, chapter.id, selectedVoice);
+            const { audioFiles: urls } = await generateTTS(bookId, chapter.id, selectedVoice, targetIndex);
 
             if (controller.signal.aborted || activeChapterIdRef.current !== chapter.id) return;
 
@@ -292,14 +297,13 @@ export const useReaderAudio = ({
             setChapters(prev => prev.map((c, idx) => idx === currentChapterIndex ? { ...c, audioFiles: urls } : c));
 
             // Start playing immediately from target
-            const targetIndex = typeof startFromIndex === 'number' ? startFromIndex : currentSegmentIndex;
             playAudio(targetIndex, urls);
 
         } catch (error) {
             if (isAbortError(error) || controller.signal.aborted) return;
             console.error('[TTS] Server API Error:', error);
             setGenerating(false);
-            stopAudioPlayback('[TTS] Không tạo được audio Vbee từ server.', error);
+            stopAudioPlayback(`[TTS] Không tạo được audio Vbee từ server. ${getErrorMessage(error, 'Vui lòng thử lại sau.')}`, error);
         } finally {
             if (activeChapterIdRef.current === chapter.id) {
                 setGenerating(false);
@@ -414,6 +418,8 @@ export const useReaderAudio = ({
         isPlaying,
         setIsPlaying,
         generating,
+        audioError,
+        clearAudioError: () => setAudioError(null),
         audioFiles,
         setAudioFiles,
         browserTTSMode,

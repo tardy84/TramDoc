@@ -366,6 +366,7 @@ export default function BookReader({ bookId, onClose }: BookReaderProps) {
                 theme={theme}
                 isPlaying={audio.isPlaying}
                 generating={audio.generating}
+                audioError={audio.audioError}
                 audioFiles={audio.audioFiles}
                 playbackSpeed={playbackSpeed}
                 currentChapterIndex={currentChapterIndex}

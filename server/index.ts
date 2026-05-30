@@ -85,6 +85,10 @@ app.use(cors({
 }));
 app.use(express.json());
 
+app.get('/api/health', (_req, res) => {
+    res.json({ ok: true });
+});
+
 // --- STATIC FILES ---
 app.use('/covers', express.static(path.join(process.cwd(), 'uploads/covers')));
 

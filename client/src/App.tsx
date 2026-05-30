@@ -17,11 +17,13 @@ function MainApp({
     books,
     loadBooks,
     loading,
+    loadError,
     onLogout
 }: {
     books: Book[],
     loadBooks: () => void,
     loading: boolean,
+    loadError: string | null,
     onLogout: () => void
 }) {
     const [uploading, setUploading] = useState(false);
@@ -45,6 +47,11 @@ function MainApp({
     const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];
         if (!file) return;
+        if (!navigator.onLine) {
+            showToast('Thiết bị đang offline. Vui lòng kết nối mạng rồi tải lại EPUB.', 'error');
+            event.currentTarget.value = '';
+            return;
+        }
         if (!file.name.toLowerCase().endsWith('.epub')) {
             showToast('Vui lòng chọn file EPUB', 'error');
             event.currentTarget.value = '';
@@ -62,6 +69,7 @@ function MainApp({
         setUploadStatus('Đang tải lên...');
 
         let pollInterval: ReturnType<typeof setInterval> | null = null;
+        let uploadFailedFromPoll = false;
         try {
             pollInterval = setInterval(async () => {
                 try {
@@ -70,7 +78,11 @@ function MainApp({
                     setUploadStatus(status.status);
 
                     if (status.error) {
+                        uploadFailedFromPoll = true;
+                        if (pollInterval) clearInterval(pollInterval);
                         setUploadStatus(status.error);
+                        setUploading(false);
+                        showToast(status.error, 'error');
                     }
                 } catch {
                     // The upload request may not have created the job yet.
@@ -89,7 +101,9 @@ function MainApp({
         } catch (error) {
             if (pollInterval) clearInterval(pollInterval);
             setUploadStatus('Lỗi');
-            showToast(getErrorMessage(error, 'Lỗi tải sách'), 'error');
+            if (!uploadFailedFromPoll) {
+                showToast(getErrorMessage(error, 'Lỗi tải sách'), 'error');
+            }
             setUploading(false);
         } finally {
             event.currentTarget.value = '';
@@ -215,6 +229,21 @@ function MainApp({
                                 <div className="h-full bg-emerald-500 transition-all duration-500" style={{ width: `${progress}%` }}></div>
                             </div>
                         </div>
+                    </div>
+                )}
+
+                {loadError && (
+                    <div className="mb-8 bg-red-500/10 border border-red-500/20 text-red-200 rounded-2xl p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                        <div>
+                            <div className="font-bold">Không thể tải thư viện</div>
+                            <div className="text-sm text-red-200/70">{loadError}</div>
+                        </div>
+                        <button
+                            onClick={loadBooks}
+                            className="px-4 py-2 bg-red-500/20 hover:bg-red-500/30 border border-red-400/20 rounded-xl text-sm font-bold transition-colors"
+                        >
+                            Thử lại
+                        </button>
                     </div>
                 )}
 
@@ -356,14 +385,17 @@ function App() {
     const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
     const [books, setBooks] = useState<Book[]>([]);
     const [loading, setLoading] = useState(true);
+    const [loadError, setLoadError] = useState<string | null>(null);
 
     const loadBooks = useCallback(async () => {
         if (!token) return;
         try {
+            setLoadError(null);
             const serverBooks = await getAllBooks();
             setBooks(serverBooks);
         } catch (error) {
             console.error('Failed to load books:', error);
+            setLoadError(getErrorMessage(error, 'Không thể tải thư viện.'));
         }
     }, [token]);
 
@@ -382,6 +414,7 @@ function App() {
     useEffect(() => {
         const handleAuthExpired = () => {
             setBooks([]);
+            setLoadError(null);
             setToken(null);
         };
 
@@ -392,6 +425,7 @@ function App() {
     const handleLogin = (newToken: string, user: User) => {
         localStorage.setItem('token', newToken);
         localStorage.setItem('user', JSON.stringify(user));
+        setLoadError(null);
         setToken(newToken);
     };
 
@@ -403,17 +437,19 @@ function App() {
         <BrowserRouter>
             <Routes>
                 <Route path="/" element={
-                    <MainApp
-                        books={books}
-                        loadBooks={loadBooks}
-                        loading={loading}
-                        onLogout={() => {
-                            localStorage.removeItem('token');
-                            localStorage.removeItem('audiobook_token');
-                            localStorage.removeItem('user');
-                            setToken(null);
-                        }}
-                    />
+            <MainApp
+                books={books}
+                loadBooks={loadBooks}
+                loading={loading}
+                loadError={loadError}
+                onLogout={() => {
+                    localStorage.removeItem('token');
+                    localStorage.removeItem('audiobook_token');
+                    localStorage.removeItem('user');
+                    setLoadError(null);
+                    setToken(null);
+                }}
+            />
                 } />
                 <Route path="*" element={<Navigate to="/" />} />
             </Routes>

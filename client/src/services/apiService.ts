@@ -94,8 +94,8 @@ export const deleteBookmark = async (id: number): Promise<void> => {
 // --- TTS Trigger API ---
 // Note: Actual streaming is handled by signed /audio/:filename URLs in HTMLAudioElement.
 // This is to trigger the generation endpoint or cache verification.
-export const generateTTS = async (bookId: number, chapterId: number, voice: string): Promise<{ audioFiles: string[] }> => {
-    const response = await api.post(`/books/${bookId}/chapters/${chapterId}/tts`, { voice });
+export const generateTTS = async (bookId: number, chapterId: number, voice: string, startSegmentIndex?: number): Promise<{ audioFiles: string[] }> => {
+    const response = await api.post(`/books/${bookId}/chapters/${chapterId}/tts`, { voice, startSegmentIndex });
     return response.data;
 };
 

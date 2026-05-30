@@ -156,6 +156,15 @@ function parseNonNegativeInt(value: unknown): number | null {
     return Number.isInteger(id) && id >= 0 ? id : null;
 }
 
+function getStartSegmentIndex(value: unknown, segmentCount: number): number | null {
+    if (value === undefined) return 0;
+
+    const index = parseNonNegativeInt(value);
+    if (index === null || index >= segmentCount) return null;
+
+    return index;
+}
+
 function getTokenFromRequest(req: Request): string | null {
     const authHeader = req.headers.authorization;
     if (authHeader?.startsWith('Bearer ')) {
@@ -211,6 +220,27 @@ function getSafeErrorMessage(error: unknown): string {
 
 function delay(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function getLookaheadSegmentIndexes(startIndex: number, segmentCount: number, count: number): number[] {
+    const indexes: number[] = [];
+    for (let i = startIndex + 1; i < segmentCount && indexes.length < count; i++) {
+        indexes.push(i);
+    }
+    return indexes;
+}
+
+async function generateSegmentsInBackground(bookId: number, chapterId: number, voice: string, indexes: number[], concurrency: number, delayBetweenBatches: number) {
+    (async () => {
+        for (let i = 0; i < indexes.length; i += concurrency) {
+            const batch = indexes.slice(i, i + concurrency);
+            await Promise.all(batch.map(index => generateSegment(bookId, chapterId, index, voice)));
+
+            if (delayBetweenBatches > 0) {
+                await delay(delayBetweenBatches);
+            }
+        }
+    })();
 }
 
 function getMissingProviderConfig(voice: string): string | null {
@@ -432,31 +462,23 @@ router.post('/books/:bookId/chapters/:chapterId/tts/regenerate', authenticateJWT
             await deleteAudioCache(fileName);
         }
 
-        const PRELOAD_COUNT = voice.startsWith('vbee-') ? 1 : 3;
-        const preloaded: number[] = [];
-        for (let i = 0; i < Math.min(PRELOAD_COUNT, chapter.segments.length); i++) {
-            if (await generateSegment(parsedBookId, parsedChapterId, i, voice)) {
-                preloaded.push(i);
-            }
+        const startIndex = getStartSegmentIndex(req.body.startSegmentIndex, chapter.segments.length);
+        if (startIndex === null) {
+            return res.status(400).json({ error: 'Start segment index không hợp lệ' });
         }
 
-        (async () => {
-            const CONCURRENCY = voice.startsWith('vbee-') ? 2 : 5;
-            const DELAY_BETWEEN_BATCHES = voice.startsWith('vbee-') ? 500 : 0;
-            for (let i = PRELOAD_COUNT; i < chapter.segments.length; i += CONCURRENCY) {
-                const batch = chapter.segments.slice(i, i + CONCURRENCY);
-                await Promise.all(batch.map(async (_, index) => {
-                    const globalIndex = i + index;
-                    await generateSegment(parsedBookId, parsedChapterId, globalIndex, voice);
-                }));
+        const preloaded: number[] = [];
+        if (await generateSegment(parsedBookId, parsedChapterId, startIndex, voice)) {
+            preloaded.push(startIndex);
+        }
 
-                if (DELAY_BETWEEN_BATCHES > 0) {
-                    await delay(DELAY_BETWEEN_BATCHES);
-                }
-            }
-        })();
+        const CONCURRENCY = voice.startsWith('vbee-') ? 2 : 5;
+        const DELAY_BETWEEN_BATCHES = voice.startsWith('vbee-') ? 500 : 0;
+        const backgroundIndexes = Array.from({ length: chapter.segments.length }, (_, index) => index)
+            .filter(index => index !== startIndex);
+        generateSegmentsInBackground(parsedBookId, parsedChapterId, voice, backgroundIndexes, CONCURRENCY, DELAY_BETWEEN_BATCHES);
 
-        return res.json({ scope: 'chapter', total: chapter.segments.length, preloaded, background: chapter.segments.length > PRELOAD_COUNT });
+        return res.json({ scope: 'chapter', total: chapter.segments.length, preloaded, background: backgroundIndexes.length > 0 });
     } catch (error: any) {
         console.error('Error regenerating TTS:', getSafeErrorMessage(error));
         return res.status(500).json({ error: error.message });
@@ -494,25 +516,33 @@ router.post('/books/:bookId/chapters/:chapterId/tts', authenticateJWT, async (re
 
         const timestamp = Date.now();
         const audioToken = createAudioToken(req.user.id, parsedBookId, parsedChapterId);
-        const audioFiles: string[] = [];
-        let allCached = true;
-
-        // 1. Check if audio files for THIS VOICE already exist and match current segment content
-        for (let i = 0; i < chapter.segments.length; i++) {
-            const segment = chapter.segments[i];
+        const audioFiles = chapter.segments.map((_, i) => {
             const fileName = buildAudioFileName(parsedBookId, parsedChapterId, voice, i);
-            const filePath = resolveAudioPath(fileName);
-            const metadataPath = resolveAudioMetadataPath(fileName);
-            if (!filePath || !metadataPath) return res.status(400).json({ error: 'Tên file audio không hợp lệ' });
+            return appendAudioToken(`/audio/${fileName}?t=${timestamp}`, audioToken);
+        });
 
-            if (!await isSegmentAudioCached(filePath, metadataPath, segment, voice)) {
-                allCached = false;
-            }
-            audioFiles.push(appendAudioToken(`/audio/${fileName}?t=${timestamp}`, audioToken));
+        if (chapter.segments.length === 0) {
+            return res.json({ audioFiles });
         }
 
-        if (allCached) {
-            console.log(`[TTS Cache] ✅ Using cached audio for book ${parsedBookId}, chapter ${parsedChapterId}, voice ${voice}`);
+        const startSegmentIndex = getStartSegmentIndex(req.body.startSegmentIndex, chapter.segments.length);
+        if (startSegmentIndex === null) {
+            return res.status(400).json({ error: 'Start segment index không hợp lệ' });
+        }
+
+        // Only validate the segment the reader needs now. Scanning every segment's
+        // audio+metadata blocks first playback on long chapters.
+        const currentSegment = chapter.segments[startSegmentIndex];
+        const currentFileName = buildAudioFileName(parsedBookId, parsedChapterId, voice, startSegmentIndex);
+        const currentFilePath = resolveAudioPath(currentFileName);
+        const currentMetadataPath = resolveAudioMetadataPath(currentFileName);
+        if (!currentFilePath || !currentMetadataPath) {
+            return res.status(400).json({ error: 'Tên file audio không hợp lệ' });
+        }
+
+        const currentCached = await isSegmentAudioCached(currentFilePath, currentMetadataPath, currentSegment, voice);
+        if (currentCached) {
+            console.log(`[TTS Cache] ✅ Using cached audio for book ${parsedBookId}, chapter ${parsedChapterId}, segment ${startSegmentIndex}, voice ${voice}`);
             return res.json({ audioFiles });
         }
 
@@ -520,34 +550,16 @@ router.post('/books/:bookId/chapters/:chapterId/tts', authenticateJWT, async (re
             return res.status(429).json({ error: 'Bạn tạo audio quá nhiều lần. Vui lòng thử lại sau.' });
         }
 
-        // 2. Generate missing segments
-        console.log(`[TTS] Generating missing audio for book ${parsedBookId}, chapter ${parsedChapterId} with voice ${voice}`);
-        const PRELOAD_COUNT = voice.startsWith('vbee-') ? 1 : 3;
+        // 2. Generate the current reading segment first so resume/change-voice starts fast.
+        console.log(`[TTS] Generating audio for book ${parsedBookId}, chapter ${parsedChapterId}, segment ${startSegmentIndex} with voice ${voice}`);
+        await generateSegment(parsedBookId, parsedChapterId, startSegmentIndex, voice);
 
-        for (let i = 0; i < Math.min(PRELOAD_COUNT, chapter.segments.length); i++) {
-            await generateSegment(parsedBookId, parsedChapterId, i, voice);
-        }
-
-        // 3. Background segments
-        const remainingStartIndex = PRELOAD_COUNT;
-        if (chapter.segments.length > remainingStartIndex) {
-            (async () => {
-                const CONCURRENCY = voice.startsWith('vbee-') ? 2 : 5;
-                const DELAY_BETWEEN_BATCHES = voice.startsWith('vbee-') ? 500 : 0;
-
-                for (let i = remainingStartIndex; i < chapter.segments.length; i += CONCURRENCY) {
-                    const batch = chapter.segments.slice(i, i + CONCURRENCY);
-                    await Promise.all(batch.map(async (_, index) => {
-                        const globalIndex = i + index;
-                        await generateSegment(parsedBookId, parsedChapterId, globalIndex, voice);
-                    }));
-
-                    if (DELAY_BETWEEN_BATCHES > 0) {
-                        await new Promise(r => setTimeout(r, DELAY_BETWEEN_BATCHES));
-                    }
-                }
-            })();
-        }
+        // 3. Background lookahead near the current reading position.
+        const CONCURRENCY = voice.startsWith('vbee-') ? 2 : 5;
+        const DELAY_BETWEEN_BATCHES = voice.startsWith('vbee-') ? 500 : 0;
+        const LOOKAHEAD_COUNT = voice.startsWith('vbee-') ? 8 : 12;
+        const lookaheadIndexes = getLookaheadSegmentIndexes(startSegmentIndex, chapter.segments.length, LOOKAHEAD_COUNT);
+        generateSegmentsInBackground(parsedBookId, parsedChapterId, voice, lookaheadIndexes, CONCURRENCY, DELAY_BETWEEN_BATCHES);
 
         res.json({ audioFiles });
     } catch (error: any) {

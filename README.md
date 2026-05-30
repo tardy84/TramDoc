@@ -79,11 +79,13 @@ Sau khi sửa `.env`, restart server.
 
 Repo đã có project Capacitor ở `/Users/nguyenphong/projects/tramdoc/client/ios`.
 Bản iOS/TestFlight không dùng được `localhost` của máy dev, nên cần deploy server lên public HTTPS trước.
+Checklist chi tiết nằm ở `/Users/nguyenphong/projects/tramdoc/IOS_TESTFLIGHT_CHECKLIST.md`.
 
 1. Deploy backend và kiểm tra API:
 
 ```bash
 curl https://api.your-domain.com/ping
+curl -H 'Origin: capacitor://localhost' -i https://api.your-domain.com/api/health
 ```
 
 Trên backend production, set `FRONTEND_URL` theo web origin được phép nếu có web client riêng; app iOS Capacitor (`capacitor://localhost`) đã được allow sẵn:
@@ -100,7 +102,10 @@ cd /Users/nguyenphong/projects/tramdoc/client
 npm run ios:doctor
 npm run ios:check-native
 npm run ios:set-version -- 1.0 1
+VITE_API_URL=https://api.your-domain.com npm run ios:smoke-api
+VITE_API_URL=https://api.your-domain.com npm run ios:preflight
 VITE_API_URL=https://api.your-domain.com npm run build:ios
+npm run ios:xcode-check
 npm run ios:open
 ```
 
@@ -125,6 +130,8 @@ npm run build
 npm run lint
 npm run ios:doctor
 npm run ios:check-native
+VITE_API_URL=https://api.your-domain.com npm run ios:smoke-api
+VITE_API_URL=https://api.your-domain.com npm run ios:preflight
 VITE_API_URL=https://api.your-domain.com npm run build:ios
 ```
 
