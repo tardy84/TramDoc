@@ -259,6 +259,7 @@ export const useReaderAudio = ({
 
         const chapter = chapters[currentChapterIndex];
         activeChapterIdRef.current = chapter.id;
+        ++playIdRef.current; // Cancel stale playback retries while a new voice/segment is being prepared.
 
         if (abortControllerRef.current) abortControllerRef.current.abort();
         const controller = new AbortController();
@@ -371,6 +372,7 @@ export const useReaderAudio = ({
 
         if (prevVoiceRef.current !== selectedVoice) {
             prevVoiceRef.current = selectedVoice;
+            ++playIdRef.current; // Ignore old voice retries/errors after URLs are cleared.
             const currentGlobal = getGlobalAudio();
             if (currentGlobal) {
                 currentGlobal.pause();

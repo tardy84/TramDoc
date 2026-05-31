@@ -9,7 +9,9 @@ const VBEE_CALLBACK_URL = process.env.VBEE_CALLBACK_URL || 'https://localhost/vb
 
 const POLL_INTERVAL_MS = 1500;
 const MAX_POLL_ATTEMPTS = 40; // 40 * 1.5s = 60s max wait
-const SUBMIT_RETRY_ATTEMPTS = 2;
+// Do not auto-resubmit Vbee jobs. A network timeout after Vbee accepted a job can
+// otherwise create duplicate billable requests for the same segment.
+const SUBMIT_RETRY_ATTEMPTS = 0;
 
 function sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));

@@ -53,6 +53,12 @@ const ReaderControls: React.FC<ReaderControlsProps> = ({
                     </div>
                 )}
                 <div className={`backdrop-blur-3xl border p-6 rounded-[40px] shadow-2xl ${currentThemeStyles.header}`}>
+                    {generating && (
+                        <div className="mb-4 flex items-center justify-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-emerald-300">
+                            <div className="h-4 w-4 rounded-full border-2 border-emerald-300/40 border-t-emerald-300 animate-spin" />
+                            <span>Đang tạo giọng đọc</span>
+                        </div>
+                    )}
                     <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-1 md:gap-3">
                             <button

@@ -29,6 +29,11 @@ const TTS_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
 const TTS_RATE_LIMIT_MAX_REQUESTS = 20;
 const TTS_GENERATION_MAX_ATTEMPTS = 2;
 const TTS_GENERATION_RETRY_DELAY_MS = 750;
+const VBEE_LOOKAHEAD_COUNT = 2;
+const VBEE_SHORT_SEGMENT_MAX_CHARS = 140;
+const VBEE_SHORT_RUN_MIN_SEGMENTS = 3;
+const VBEE_SHORT_RUN_LOOKAHEAD_COUNT = 5;
+const VBEE_SHORT_RUN_EARLY_WARMUP_COUNT = 2;
 const ttsRequests = new Map<number, { count: number; resetAt: number }>();
 
 interface AudioAccessClaims {
@@ -230,6 +235,20 @@ function getLookaheadSegmentIndexes(startIndex: number, segmentCount: number, co
     return indexes;
 }
 
+function getShortSegmentRunLength(segments: SegmentForAudioCache[], startIndex: number): number {
+    let count = 0;
+    for (let i = startIndex; i < segments.length; i++) {
+        if (segments[i].content.trim().length > VBEE_SHORT_SEGMENT_MAX_CHARS) break;
+        count++;
+    }
+    return count;
+}
+
+function getVbeeLookaheadCount(segments: SegmentForAudioCache[], startIndex: number): number {
+    const shortRunLength = getShortSegmentRunLength(segments, startIndex);
+    return shortRunLength >= VBEE_SHORT_RUN_MIN_SEGMENTS ? VBEE_SHORT_RUN_LOOKAHEAD_COUNT : VBEE_LOOKAHEAD_COUNT;
+}
+
 async function generateSegmentsInBackground(bookId: number, chapterId: number, voice: string, indexes: number[], concurrency: number, delayBetweenBatches: number) {
     (async () => {
         for (let i = 0; i < indexes.length; i += concurrency) {
@@ -326,7 +345,8 @@ async function generateSegment(bookId: number, chapterId: number, segmentIndex: 
         const ttsService = voice.startsWith('vbee-') ? vbeeTTS : voice.startsWith('minimax-') ? minimaxTTS : voice.startsWith('azure-') ? azureTTS : voice.startsWith('gemini-') ? geminiTTS : googleTTS;
 
         let buffer: Buffer | null = null;
-        for (let attempt = 1; attempt <= TTS_GENERATION_MAX_ATTEMPTS; attempt++) {
+        const maxAttempts = voice.startsWith('vbee-') ? 1 : TTS_GENERATION_MAX_ATTEMPTS;
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
             try {
                 buffer = await ttsService.synthesize(
                     segment.content,
@@ -335,8 +355,8 @@ async function generateSegment(bookId: number, chapterId: number, segmentIndex: 
                 );
                 break;
             } catch (error) {
-                if (attempt >= TTS_GENERATION_MAX_ATTEMPTS) throw error;
-                console.warn(`[Audio] ⚠️ Retry ${attempt}/${TTS_GENERATION_MAX_ATTEMPTS - 1} for ${fileName}: ${getSafeErrorMessage(error)}`);
+                if (attempt >= maxAttempts) throw error;
+                console.warn(`[Audio] ⚠️ Retry ${attempt}/${maxAttempts - 1} for ${fileName}: ${getSafeErrorMessage(error)}`);
                 await delay(TTS_GENERATION_RETRY_DELAY_MS * attempt);
             }
         }
@@ -457,6 +477,12 @@ router.post('/books/:bookId/chapters/:chapterId/tts/regenerate', authenticateJWT
             return res.json({ scope: 'segment', segmentIndex, generated });
         }
 
+        if (voice.startsWith('vbee-')) {
+            return res.status(400).json({
+                error: 'Không hỗ trợ tạo lại cả chapter bằng Vbee để tránh tốn credit. Vui lòng tạo lại từng đoạn nếu cần.'
+            });
+        }
+
         for (let i = 0; i < chapter.segments.length; i++) {
             const fileName = buildAudioFileName(parsedBookId, parsedChapterId, voice, i);
             await deleteAudioCache(fileName);
@@ -542,6 +568,10 @@ router.post('/books/:bookId/chapters/:chapterId/tts', authenticateJWT, async (re
 
         const currentCached = await isSegmentAudioCached(currentFilePath, currentMetadataPath, currentSegment, voice);
         if (currentCached) {
+            if (voice.startsWith('vbee-')) {
+                const lookaheadIndexes = getLookaheadSegmentIndexes(startSegmentIndex, chapter.segments.length, getVbeeLookaheadCount(chapter.segments, startSegmentIndex));
+                generateSegmentsInBackground(parsedBookId, parsedChapterId, voice, lookaheadIndexes, 1, 500);
+            }
             console.log(`[TTS Cache] ✅ Using cached audio for book ${parsedBookId}, chapter ${parsedChapterId}, segment ${startSegmentIndex}, voice ${voice}`);
             return res.json({ audioFiles });
         }
@@ -551,14 +581,25 @@ router.post('/books/:bookId/chapters/:chapterId/tts', authenticateJWT, async (re
         }
 
         // 2. Generate the current reading segment first so resume/change-voice starts fast.
+        // For runs of very short dialogue segments, start the next Vbee jobs early
+        // while the current segment is still generating. This smooths playback gaps
+        // without preloading whole chapters.
+        const vbeeLookaheadCount = voice.startsWith('vbee-') ? getVbeeLookaheadCount(chapter.segments, startSegmentIndex) : 12;
+        const earlyWarmupIndexes = voice.startsWith('vbee-') && vbeeLookaheadCount > VBEE_LOOKAHEAD_COUNT
+            ? getLookaheadSegmentIndexes(startSegmentIndex, chapter.segments.length, VBEE_SHORT_RUN_EARLY_WARMUP_COUNT)
+            : [];
+        if (earlyWarmupIndexes.length > 0) {
+            generateSegmentsInBackground(parsedBookId, parsedChapterId, voice, earlyWarmupIndexes, 1, 250);
+        }
+
         console.log(`[TTS] Generating audio for book ${parsedBookId}, chapter ${parsedChapterId}, segment ${startSegmentIndex} with voice ${voice}`);
         await generateSegment(parsedBookId, parsedChapterId, startSegmentIndex, voice);
 
         // 3. Background lookahead near the current reading position.
-        const CONCURRENCY = voice.startsWith('vbee-') ? 2 : 5;
+        const CONCURRENCY = voice.startsWith('vbee-') ? 1 : 5;
         const DELAY_BETWEEN_BATCHES = voice.startsWith('vbee-') ? 500 : 0;
-        const LOOKAHEAD_COUNT = voice.startsWith('vbee-') ? 8 : 12;
-        const lookaheadIndexes = getLookaheadSegmentIndexes(startSegmentIndex, chapter.segments.length, LOOKAHEAD_COUNT);
+        const lookaheadIndexes = getLookaheadSegmentIndexes(startSegmentIndex, chapter.segments.length, vbeeLookaheadCount)
+            .filter(index => !earlyWarmupIndexes.includes(index));
         generateSegmentsInBackground(parsedBookId, parsedChapterId, voice, lookaheadIndexes, CONCURRENCY, DELAY_BETWEEN_BATCHES);
 
         res.json({ audioFiles });
@@ -657,13 +698,16 @@ router.get('/audio/:filename', async (req: Request, res: Response) => {
             return res.status(503).send('TTS provider unavailable or audio generation failed');
         }
 
-        // 2. Lookahead: Trigger generation for next 3 segments (Non-Blocking)
-        (async () => {
-            console.log(`[Audio] 🔮 Triggering lookahead for segments ${segmentIndex + 1}..${segmentIndex + 3} with voice ${voice}`);
-            await generateSegment(bookId, chapterId, segmentIndex + 1, voice);
-            await generateSegment(bookId, chapterId, segmentIndex + 2, voice);
-            await generateSegment(bookId, chapterId, segmentIndex + 3, voice);
-        })();
+        // 2. Lookahead for cheaper/non-Vbee providers only. Vbee bills per submitted
+        // segment, so /audio cache misses must not fan out into extra credit usage.
+        if (!voice.startsWith('vbee-')) {
+            (async () => {
+                console.log(`[Audio] 🔮 Triggering lookahead for segments ${segmentIndex + 1}..${segmentIndex + 3} with voice ${voice}`);
+                await generateSegment(bookId, chapterId, segmentIndex + 1, voice);
+                await generateSegment(bookId, chapterId, segmentIndex + 2, voice);
+                await generateSegment(bookId, chapterId, segmentIndex + 3, voice);
+            })();
+        }
 
         // 3. Serve file
         return res.sendFile(filePath);
