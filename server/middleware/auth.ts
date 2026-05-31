@@ -4,9 +4,28 @@ import { PrismaClient } from '@prisma/client';
 import { JWT_SECRET } from '../config/env.js';
 
 const prisma = new PrismaClient();
+const LOCAL_AUTH_BYPASS_USER_ID = 1;
 
 export interface AuthRequest extends Request {
     user?: any;
+}
+
+function isLocalAuthBypassEnabled(): boolean {
+    return process.env.TRAMDOC_BYPASS_AUTH === '1';
+}
+
+async function getOrCreateLocalBypassUser() {
+    return prisma.user.upsert({
+        where: { id: LOCAL_AUTH_BYPASS_USER_ID },
+        update: { email: 'local@tramdoc.dev', role: 'ADMIN', name: 'Trạm Đọc Local' },
+        create: {
+            id: LOCAL_AUTH_BYPASS_USER_ID,
+            email: 'local@tramdoc.dev',
+            passwordHash: 'local-auth-bypass',
+            role: 'ADMIN',
+            name: 'Trạm Đọc Local'
+        }
+    });
 }
 
 interface JwtUserPayload {
@@ -29,6 +48,16 @@ function isJwtUserPayload(value: unknown): value is JwtUserPayload {
 }
 
 export const authenticateJWT = async (req: AuthRequest, res: Response, next: NextFunction) => {
+    if (isLocalAuthBypassEnabled()) {
+        try {
+            req.user = await getOrCreateLocalBypassUser();
+            return next();
+        } catch (err: any) {
+            console.error('[Auth] Local auth bypass user setup failed:', err.message);
+            return res.sendStatus(500);
+        }
+    }
+
     const token = getBearerToken(req);
     if (!token) {
         console.warn('[Auth] No Authorization header provided');
@@ -59,6 +88,16 @@ export const authenticateJWT = async (req: AuthRequest, res: Response, next: Nex
 };
 
 export const authenticateAdmin = async (req: AuthRequest, res: Response, next: NextFunction) => {
+    if (isLocalAuthBypassEnabled()) {
+        try {
+            req.user = await getOrCreateLocalBypassUser();
+            return next();
+        } catch (err: any) {
+            console.error('[Auth] Local admin bypass user setup failed:', err.message);
+            return res.sendStatus(500);
+        }
+    }
+
     const token = getBearerToken(req);
     if (!token) {
         return res.sendStatus(401);

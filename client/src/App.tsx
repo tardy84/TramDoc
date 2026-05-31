@@ -12,6 +12,8 @@ import { getAllBooks, deleteBook as deleteBookApi, uploadBook, getUploadStatus }
 import { getErrorMessage } from './utils/errors';
 
 const MAX_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024;
+const BYPASS_AUTH = import.meta.env.VITE_BYPASS_AUTH === '1';
+const LOCAL_AUTH_TOKEN = 'local-auth-bypass';
 
 function MainApp({
     books,
@@ -382,7 +384,7 @@ function MainApp({
 
 
 function App() {
-    const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
+    const [token, setToken] = useState<string | null>(() => localStorage.getItem('token') || (BYPASS_AUTH ? LOCAL_AUTH_TOKEN : null));
     const [books, setBooks] = useState<Book[]>([]);
     const [loading, setLoading] = useState(true);
     const [loadError, setLoadError] = useState<string | null>(null);
@@ -413,6 +415,7 @@ function App() {
 
     useEffect(() => {
         const handleAuthExpired = () => {
+            if (BYPASS_AUTH) return;
             setBooks([]);
             setLoadError(null);
             setToken(null);
@@ -447,7 +450,7 @@ function App() {
                     localStorage.removeItem('audiobook_token');
                     localStorage.removeItem('user');
                     setLoadError(null);
-                    setToken(null);
+                    setToken(BYPASS_AUTH ? LOCAL_AUTH_TOKEN : null);
                 }}
             />
                 } />
