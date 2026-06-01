@@ -29,11 +29,11 @@ const TTS_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
 const TTS_RATE_LIMIT_MAX_REQUESTS = 20;
 const TTS_GENERATION_MAX_ATTEMPTS = 2;
 const TTS_GENERATION_RETRY_DELAY_MS = 750;
-const VBEE_LOOKAHEAD_COUNT = 2;
+const VBEE_LOOKAHEAD_COUNT = 4;
 const VBEE_SHORT_SEGMENT_MAX_CHARS = 140;
 const VBEE_SHORT_RUN_MIN_SEGMENTS = 3;
 const VBEE_SHORT_RUN_LOOKAHEAD_COUNT = 5;
-const VBEE_SHORT_RUN_EARLY_WARMUP_COUNT = 2;
+const VBEE_SHORT_RUN_EARLY_WARMUP_COUNT = 3;
 const ttsRequests = new Map<number, { count: number; resetAt: number }>();
 
 interface AudioAccessClaims {
@@ -235,6 +235,13 @@ function getLookaheadSegmentIndexes(startIndex: number, segmentCount: number, co
     return indexes;
 }
 
+function isSpeakableSegmentContent(content: string): boolean {
+    const normalized = content
+        .replace(/[\s\u00a0]+/g, '')
+        .replace(/[*＊✱✲✳✴✻✼✽·•●○◆◇■□_—–~….-]+/g, '');
+    return /[\p{L}\p{N}]/u.test(normalized);
+}
+
 function getShortSegmentRunLength(segments: SegmentForAudioCache[], startIndex: number): number {
     let count = 0;
     for (let i = startIndex; i < segments.length; i++) {
@@ -300,6 +307,11 @@ async function generateSegment(bookId: number, chapterId: number, segmentIndex: 
 
     if (!segment) {
         return false;
+    }
+
+    if (!isSpeakableSegmentContent(segment.content)) {
+        console.log(`[Audio] ⏭️ Skipping non-speech segment ${segmentIndex} for book ${bookId}, chapter ${chapterId}`);
+        return true;
     }
 
     // 1. Check if already exists for the current segment content/voice
@@ -542,7 +554,11 @@ router.post('/books/:bookId/chapters/:chapterId/tts', authenticateJWT, async (re
 
         const timestamp = Date.now();
         const audioToken = createAudioToken(req.user.id, parsedBookId, parsedChapterId);
-        const audioFiles = chapter.segments.map((_, i) => {
+        const audioFiles = chapter.segments.map((segment, i) => {
+            if (!isSpeakableSegmentContent(segment.content)) {
+                return '';
+            }
+
             const fileName = buildAudioFileName(parsedBookId, parsedChapterId, voice, i);
             return appendAudioToken(`/audio/${fileName}?t=${timestamp}`, audioToken);
         });
@@ -559,6 +575,13 @@ router.post('/books/:bookId/chapters/:chapterId/tts', authenticateJWT, async (re
         // Only validate the segment the reader needs now. Scanning every segment's
         // audio+metadata blocks first playback on long chapters.
         const currentSegment = chapter.segments[startSegmentIndex];
+        if (!isSpeakableSegmentContent(currentSegment.content)) {
+            const lookaheadIndexes = getLookaheadSegmentIndexes(startSegmentIndex, chapter.segments.length, voice.startsWith('vbee-') ? getVbeeLookaheadCount(chapter.segments, startSegmentIndex) : 12);
+            generateSegmentsInBackground(parsedBookId, parsedChapterId, voice, lookaheadIndexes, voice.startsWith('vbee-') ? 1 : 5, voice.startsWith('vbee-') ? 500 : 0);
+            console.log(`[TTS] ⏭️ Start segment ${startSegmentIndex} is non-speech; returning URLs for client-side skip.`);
+            return res.json({ audioFiles });
+        }
+
         const currentFileName = buildAudioFileName(parsedBookId, parsedChapterId, voice, startSegmentIndex);
         const currentFilePath = resolveAudioPath(currentFileName);
         const currentMetadataPath = resolveAudioMetadataPath(currentFileName);

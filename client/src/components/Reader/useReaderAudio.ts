@@ -4,6 +4,7 @@ import { generateTTS } from '../../services/apiService';
 import { resolveApiUrl } from '../../constants';
 import { getErrorMessage, isAbortError } from '../../utils/errors';
 
+const AUDIO_PRELOAD_WINDOW = 3;
 
 interface UseReaderAudioProps {
     bookId: number;
@@ -39,8 +40,7 @@ export const useReaderAudio = ({
     const [browserTTSMode, setBrowserTTSMode] = useState(false);
 
     const audioRef = useRef<HTMLAudioElement | null>(null);
-    const preloadAudioRef = useRef<HTMLAudioElement | null>(null);
-    const nextAudioIndexRef = useRef<number | null>(null);
+    const preloadAudioMapRef = useRef<Map<number, HTMLAudioElement>>(new Map());
     const preloadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const abortControllerRef = useRef<AbortController | null>(null);
     const activeChapterIdRef = useRef<number | null>(null);
@@ -60,9 +60,27 @@ export const useReaderAudio = ({
         setIsPlaying(false);
     }, []);
 
+    const isSpeakableSegment = useCallback((index: number) => {
+        const content = chapters[currentChapterIndex]?.segments[index]?.content ?? '';
+        const normalized = content
+            .replace(/[\s\u00a0]+/g, '')
+            .replace(/[*＊✱✲✳✴✻✼✽·•●○◆◇■□_—–~….-]+/g, '');
+        return /[\p{L}\p{N}]/u.test(normalized);
+    }, [chapters, currentChapterIndex]);
+
     const playBrowserTTS = useCallback((index: number) => {
         const chapter = chapters[currentChapterIndex];
         if (!chapter || !chapter.segments[index]) return;
+
+        if (!isSpeakableSegment(index)) {
+            if (index + 1 < chapter.segments.length) {
+                setCurrentSegmentIndex(index + 1);
+                playBrowserTTS(index + 1);
+            } else {
+                nextChapter();
+            }
+            return;
+        }
 
         window.speechSynthesis.cancel();
         queuedIndicesRef.current.clear();
@@ -96,7 +114,7 @@ export const useReaderAudio = ({
 
         queuedIndicesRef.current.add(index);
         window.speechSynthesis.speak(utterance);
-    }, [chapters, currentChapterIndex, playbackSpeed, nextChapter, setCurrentSegmentIndex, getGlobalAudio, setGlobalAudio]);
+    }, [chapters, currentChapterIndex, playbackSpeed, nextChapter, setCurrentSegmentIndex, getGlobalAudio, setGlobalAudio, isSpeakableSegment]);
 
     const playAudio = useCallback(async (index: number, _files: string[] = audioFiles, retryCount = 0, incomingPlayId?: number) => {
         const chapterIdx = currentChapterIndex;
@@ -110,11 +128,9 @@ export const useReaderAudio = ({
         setCurrentSegmentIndex(index);
 
         const getAudioForIndex = async (idx: number): Promise<HTMLAudioElement | null> => {
-            // Check preloaded
-            if (nextAudioIndexRef.current === idx && preloadAudioRef.current) {
-                const preloaded = preloadAudioRef.current;
-                preloadAudioRef.current = null;
-                nextAudioIndexRef.current = null;
+            const preloaded = preloadAudioMapRef.current.get(idx);
+            if (preloaded) {
+                preloadAudioMapRef.current.delete(idx);
                 return preloaded;
             }
 
@@ -132,22 +148,36 @@ export const useReaderAudio = ({
             return audio;
         };
 
-        const preloadNext = async (idx: number) => {
-            if (idx >= chapter.segments.length) return;
-            if (nextAudioIndexRef.current === idx) return;
-            
-            // Aggressive pre-fetch: Force the browser to start downloading the file into cache 
-            // BEFORE creating the audio element wait. This circumvents slow audio tag initialization.
-            const url = activeUrlMapRef.current.get(idx) || ( _files ? _files[idx] : null);
-            if (url) {
+        const preloadUpcoming = async (startIdx: number) => {
+            let queued = 0;
+
+            for (let idx = startIdx; idx < chapter.segments.length && queued < AUDIO_PRELOAD_WINDOW; idx++) {
+                if (!isSpeakableSegment(idx)) continue;
+                if (preloadAudioMapRef.current.has(idx)) {
+                    queued++;
+                    continue;
+                }
+
+                // Aggressive pre-fetch: Force the browser to start downloading the file into cache
+                // BEFORE creating the audio element wait. This circumvents slow audio tag initialization.
+                const url = activeUrlMapRef.current.get(idx) || (_files ? _files[idx] : null);
+                if (!url) continue;
+
                 fetch(resolveApiUrl(url)).catch(() => {});
+
+                const audio = new Audio(resolveApiUrl(url));
+                audio.playbackRate = playbackSpeed;
+                audio.preload = 'auto';
+                audio.load();
+                preloadAudioMapRef.current.set(idx, audio);
+                queued++;
             }
 
-            const nextAudio = await getAudioForIndex(idx);
-            if (nextAudio) {
-                nextAudio.load();
-                preloadAudioRef.current = nextAudio;
-                nextAudioIndexRef.current = idx;
+            // Keep the queue centered near the active reading position.
+            for (const preloadIndex of preloadAudioMapRef.current.keys()) {
+                if (preloadIndex < index || preloadIndex >= startIdx + AUDIO_PRELOAD_WINDOW + 3) {
+                    preloadAudioMapRef.current.delete(preloadIndex);
+                }
             }
         };
 
@@ -181,6 +211,18 @@ export const useReaderAudio = ({
         if (currentPlayId !== playIdRef.current) return;
 
         if (!audio) {
+            if (!isSpeakableSegment(index)) {
+                if (index + 1 < chapter.segments.length) {
+                    setCurrentSegmentIndex(index + 1);
+                    playAudio(index + 1, _files, 0, currentPlayId);
+                } else if (currentChapterIndex < chapters.length - 1) {
+                    nextChapter();
+                } else {
+                    setIsPlaying(false);
+                }
+                return;
+            }
+
             if (retryCount < 3) {
                 setTimeout(() => {
                     if (currentPlayId === playIdRef.current) {
@@ -198,6 +240,18 @@ export const useReaderAudio = ({
 
         audio.onerror = () => {
             if (currentPlayId !== playIdRef.current) return;
+            if (!isSpeakableSegment(index)) {
+                if (index + 1 < chapter.segments.length) {
+                    setCurrentSegmentIndex(index + 1);
+                    playAudio(index + 1, _files, 0, currentPlayId);
+                } else if (currentChapterIndex < chapters.length - 1) {
+                    nextChapter();
+                } else {
+                    setIsPlaying(false);
+                }
+                return;
+            }
+
             if (retryCount < 3) {
                 setTimeout(() => {
                     if (currentPlayId === playIdRef.current) {
@@ -215,8 +269,9 @@ export const useReaderAudio = ({
                 // GAPLESS HACK: If we have preloaded the next segment, play it synchronously
                 // here inside the ending frame of the last audio, completely avoiding
                 // React event loop and state update delays.
-                if (nextAudioIndexRef.current === index + 1 && preloadAudioRef.current) {
-                    preloadAudioRef.current.play().catch(console.error);
+                const nextAudio = preloadAudioMapRef.current.get(index + 1);
+                if (nextAudio) {
+                    nextAudio.play().catch(console.error);
                 }
                 playAudio(index + 1, _files);
             } else if (currentChapterIndex < chapters.length - 1) {
@@ -247,12 +302,12 @@ export const useReaderAudio = ({
 
         setIsPlaying(true);
 
-        // Preload next segments immediately (no delay)
+        // Preload upcoming segments immediately (no delay)
         if (activeChapterIdRef.current === chapterId) {
-            preloadNext(index + 1);
+            preloadUpcoming(index + 1);
         }
 
-    }, [audioFiles, chapters, currentChapterIndex, nextChapter, playbackSpeed, stopAudioPlayback, setCurrentSegmentIndex, getGlobalAudio, setGlobalAudio]);
+    }, [audioFiles, chapters, currentChapterIndex, nextChapter, playbackSpeed, stopAudioPlayback, setCurrentSegmentIndex, getGlobalAudio, setGlobalAudio, isSpeakableSegment]);
 
     const generateAudio = useCallback(async (startFromIndex?: number) => {
         if (chapters.length === 0) return;
@@ -267,8 +322,7 @@ export const useReaderAudio = ({
 
         window.speechSynthesis.cancel();
         queuedIndicesRef.current.clear();
-        preloadAudioRef.current = null;
-        nextAudioIndexRef.current = null;
+        preloadAudioMapRef.current.clear();
 
         const currentGlobal = getGlobalAudio();
         if (currentGlobal) {
@@ -381,8 +435,7 @@ export const useReaderAudio = ({
             }
             activeUrlMapRef.current.clear();
             setAudioFiles([]);
-            preloadAudioRef.current = null;
-            nextAudioIndexRef.current = null;
+            preloadAudioMapRef.current.clear();
             if (isPlaying) {
                 generateAudio(currentSegmentIndex);
                 return;
@@ -398,6 +451,7 @@ export const useReaderAudio = ({
             }
             activeChapterIdRef.current = chapter.id;
             activeUrlMapRef.current.clear();
+            preloadAudioMapRef.current.clear();
             setAudioFiles(chapter.audioFiles || []);
             if (isPlaying) {
                 if (chapter.audioFiles && chapter.audioFiles.length > 0) {
