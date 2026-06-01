@@ -163,17 +163,17 @@ function MainApp({
         .slice(0, 3);
 
     return (
-        <div className="min-h-screen bg-slate-900 text-slate-100 font-outfit selection:bg-emerald-500/30">
-            <div className="container mx-auto px-4 py-4">
-                <header className="flex items-center justify-between mb-6 pb-2 border-b border-slate-800/30">
-                    <div className="flex items-center gap-1.5 group">
-                        <img src="/logo.png" alt="Logo" className="h-10 md:h-14 w-auto object-contain mix-blend-screen" />
-                        <h1 className="text-xl md:text-4xl font-black text-white tracking-tight font-playfair bg-gradient-to-br from-white via-emerald-100 to-teal-200 bg-clip-text text-transparent">
+        <div className="min-h-screen ios-library-page bg-slate-900 text-slate-100 font-outfit selection:bg-emerald-500/30">
+            <div className="mx-auto w-full max-w-6xl px-3 sm:px-4 md:px-6">
+                <header className="flex items-center justify-between gap-2 mb-4 pb-2 border-b border-slate-800/30">
+                    <div className="flex min-w-0 items-center gap-1.5 group">
+                        <img src="/logo.png" alt="Logo" className="h-8 md:h-14 w-auto object-contain mix-blend-screen shrink-0" />
+                        <h1 className="truncate text-lg md:text-4xl font-black text-white tracking-tight font-playfair bg-gradient-to-br from-white via-emerald-100 to-teal-200 bg-clip-text text-transparent">
                             Trạm Đọc
                         </h1>
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    <div className="flex shrink-0 items-center gap-1.5 md:gap-2">
                         <button
                             onClick={() => setShowDashboard(true)}
                             className="p-2 md:p-3 bg-slate-800/50 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl transition-all border border-white/5 active:scale-95"
@@ -196,7 +196,7 @@ function MainApp({
 
                         <button
                             onClick={onLogout}
-                            className="p-2 md:p-3 bg-red-500/10 hover:bg-red-500/20 text-red-500 hover:text-red-400 rounded-xl transition-all border border-red-500/20 active:scale-95 ml-2"
+                            className="p-2 md:p-3 bg-red-500/10 hover:bg-red-500/20 text-red-500 hover:text-red-400 rounded-xl transition-all border border-red-500/20 active:scale-95 md:ml-2"
                             title="Đăng xuất"
                         >
                             <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 md:h-6 md:w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -257,20 +257,20 @@ function MainApp({
                     setSelectedBookId={setSelectedBookId} 
                 />
 
-                <main className="pb-12">
-                    <div className="flex flex-col gap-4 mb-8">
+                <main className="pb-8 md:pb-12">
+                    <div className="flex flex-col gap-3 mb-6 md:gap-4 md:mb-8">
                         <div className="relative group">
                             <input
                                 type="text"
                                 placeholder="Tìm tên sách, tác giả..."
                                 value={searchQuery}
                                 onChange={(e) => setSearchQuery(e.target.value)}
-                                className="w-full bg-slate-800/50 border border-slate-700/50 rounded-2xl py-4 pl-12 pr-4 text-white focus:outline-none focus:border-emerald-500/50 focus:ring-4 focus:ring-emerald-500/10 transition-all placeholder:text-slate-500 font-medium"
+                                className="w-full bg-slate-800/50 border border-slate-700/50 rounded-2xl py-3.5 md:py-4 pl-11 md:pl-12 pr-4 text-sm md:text-base text-white focus:outline-none focus:border-emerald-500/50 focus:ring-4 focus:ring-emerald-500/10 transition-all placeholder:text-slate-500 font-medium"
                             />
                             <span className="absolute left-4 top-1/2 -translate-y-1/2 text-xl opacity-50">🔍</span>
                         </div>
 
-                        <div className="flex items-center justify-between">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                             <div className="flex items-center gap-2">
                                 <h2 className="text-lg md:text-xl font-bold text-white flex items-center gap-2">
                                     <span className="text-emerald-500">📚</span> Thư viện
@@ -280,8 +280,8 @@ function MainApp({
                                 </span>
                             </div>
 
-                            <div className="flex items-center gap-2">
-                                <div className="relative">
+                            <div className="flex w-full items-center gap-2 sm:w-auto sm:justify-end">
+                                <div className="relative shrink-0">
                                     <select
                                         value={sortBy}
                                         onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
@@ -294,16 +294,16 @@ function MainApp({
                                     <span className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-[8px] opacity-40">▼</span>
                                 </div>
 
-                                <div className="flex bg-slate-800/80 p-0.5 rounded-xl border border-white/5">
+                                <div className="flex flex-1 bg-slate-800/80 p-0.5 rounded-xl border border-white/5 sm:flex-none">
                                     <button
                                         onClick={() => setViewMode('all')}
-                                        className={`px-3 py-1.5 rounded-lg text-[9px] font-black transition-all uppercase ${viewMode === 'all' ? 'bg-emerald-500 text-white' : 'text-slate-500'}`}
+                                        className={`flex-1 px-3 py-1.5 rounded-lg text-[9px] font-black transition-all uppercase ${viewMode === 'all' ? 'bg-emerald-500 text-white' : 'text-slate-500'}`}
                                     >
                                         Tất cả
                                     </button>
                                     <button
                                         onClick={() => setViewMode('author')}
-                                        className={`px-3 py-1.5 rounded-lg text-[9px] font-black transition-all uppercase ${viewMode === 'author' ? 'bg-emerald-500 text-white' : 'text-slate-500'}`}
+                                        className={`flex-1 px-3 py-1.5 rounded-lg text-[9px] font-black transition-all uppercase ${viewMode === 'author' ? 'bg-emerald-500 text-white' : 'text-slate-500'}`}
                                     >
                                         Tác giả
                                     </button>
@@ -335,7 +335,7 @@ function MainApp({
                                             <div className="h-px flex-1 bg-white/5" />
                                             <span className="text-[10px] font-medium text-slate-600 italic">{authorBooks.length}</span>
                                         </h3>
-                                        <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2 md:gap-6">
+                                        <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2.5 md:gap-6">
                                             {authorBooks.map((book) => (
                                                 <BookCard key={book.id} book={book} onSelect={setSelectedBookId} onDelete={setDeleteConfirm} />
                                             ))}
@@ -344,7 +344,7 @@ function MainApp({
                                 ))}
                         </div>
                     ) : (
-                        <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2 md:gap-6 animate-in fade-in duration-500">
+                        <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2.5 md:gap-6 animate-in fade-in duration-500">
                             {filteredAndSortedBooks.map((book) => (
                                 <BookCard key={book.id} book={book} onSelect={setSelectedBookId} onDelete={setDeleteConfirm} />
                             ))}
@@ -364,7 +364,7 @@ function MainApp({
             />
 
             {toast && (
-                <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[100] animate-in slide-in-from-bottom-8">
+                <div className="fixed left-3 right-3 ios-safe-toast z-[100] animate-in slide-in-from-bottom-8 sm:left-1/2 sm:right-auto sm:-translate-x-1/2">
                     <div className={`flex items-center gap-3 px-6 py-4 rounded-2xl shadow-2xl backdrop-blur-xl border ${toast.type === 'success' ? 'bg-emerald-500/20 border-emerald-500/30 text-emerald-400' : 'bg-red-500/20 border-red-500/30 text-red-400'}`}>
                         <span>{toast.type === 'success' ? '✨' : '⚠️'}</span>
                         <span className="font-semibold">{toast.message}</span>

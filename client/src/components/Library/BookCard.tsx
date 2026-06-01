@@ -14,7 +14,7 @@ export default function BookCard({ book, onSelect, onDelete }: BookCardProps) {
 
     return (
         <div
-            className="group relative flex flex-col bg-slate-900/40 rounded-2xl overflow-hidden border border-white/5 transition-all duration-500 cursor-pointer h-full hover:shadow-2xl hover:shadow-emerald-500/10 hover:border-white/10"
+            className="group relative flex flex-col bg-slate-900/40 rounded-xl md:rounded-2xl overflow-hidden border border-white/5 transition-all duration-500 cursor-pointer h-full hover:shadow-2xl hover:shadow-emerald-500/10 hover:border-white/10"
             onClick={() => onSelect(book.id)}
         >
             <div className="aspect-[2/3] w-full bg-slate-950 relative overflow-hidden">
@@ -79,11 +79,11 @@ export default function BookCard({ book, onSelect, onDelete }: BookCardProps) {
                 )}
             </div>
 
-            <div className="p-3 flex-1 flex flex-col justify-start bg-gradient-to-b from-transparent to-slate-900/30">
-                <h3 className="text-white font-playfair font-bold leading-tight mb-1 truncate group-hover:text-emerald-400 transition-colors uppercase tracking-tight">
+            <div className="p-2 md:p-3 flex-1 flex flex-col justify-start bg-gradient-to-b from-transparent to-slate-900/30">
+                <h3 className="text-[11px] md:text-base text-white font-playfair font-bold leading-tight mb-0.5 md:mb-1 truncate group-hover:text-emerald-400 transition-colors uppercase tracking-tight">
                     {book.title}
                 </h3>
-                <p className="text-slate-500 text-xs truncate font-medium">
+                <p className="text-slate-500 text-[10px] md:text-xs truncate font-medium">
                     {book.author || 'Tác giả ẩn danh'}
                 </p>
             </div>

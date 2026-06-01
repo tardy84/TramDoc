@@ -289,7 +289,7 @@ export default function BookReader({ bookId, onClose }: BookReaderProps) {
     const currentChapter = chapters[currentChapterIndex];
 
     return (
-        <div className={`fixed inset-0 z-50 overflow-hidden flex flex-col font-${fontFamily} ${currentThemeStyles.container} ${currentThemeStyles.text} animate-in fade-in duration-500`}>
+        <div className={`fixed inset-0 z-50 overflow-hidden flex flex-col font-${fontFamily} ios-safe-page ${currentThemeStyles.container} ${currentThemeStyles.text} animate-in fade-in duration-500`}>
 
             <ReaderHeader
                 book={book}
@@ -308,8 +308,7 @@ export default function BookReader({ bookId, onClose }: BookReaderProps) {
             <div
                 key={currentChapterIndex}
                 onScroll={handleScroll}
-                className="container mx-auto px-4 py-20 h-screen overflow-y-auto animate-in fade-in slide-in-from-right-4 duration-500 ease-out scroll-smooth no-scrollbar"
-                style={{ paddingBottom: '160px' }}
+                className="absolute inset-x-0 mx-auto px-2 sm:px-4 ios-reader-scroll animate-in fade-in slide-in-from-right-4 duration-500 ease-out scroll-smooth no-scrollbar"
             >
                 {currentChapter && (
                     <div className="max-w-3xl mx-auto">
@@ -332,8 +331,8 @@ export default function BookReader({ bookId, onClose }: BookReaderProps) {
                             </div>
                         )}
 
-                        <div className={`rounded-[40px] p-6 md:p-16 shadow-2xl transition-all duration-700 ${currentThemeStyles.paper} paper-texture shadow-black/20 overflow-hidden`}>
-                            <div className="space-y-1 text-justify leading-relaxed md:leading-[2]">
+                        <div className={`rounded-3xl md:rounded-[40px] p-3 sm:p-5 md:p-16 shadow-2xl transition-all duration-700 ${currentThemeStyles.paper} paper-texture shadow-black/20 overflow-hidden`}>
+                            <div className="space-y-0.5 text-left sm:text-justify leading-[1.72] md:leading-[2]">
                                 {currentChapter.segments.map((segment, index) => (
                                     <div
                                         key={segment.id}

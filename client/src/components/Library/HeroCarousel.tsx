@@ -13,9 +13,9 @@ export default function HeroCarousel({ heroBooks, activeHeroIndex, setActiveHero
     if (heroBooks.length === 0) return null;
 
     return (
-        <div className="mb-4">
-            <div className="flex items-center justify-between mb-4 px-1">
-                <h3 className="text-xs font-black text-emerald-500 uppercase tracking-[0.3em]">
+        <div className="mb-3 md:mb-4">
+            <div className="flex items-center justify-between mb-3 px-1 md:mb-4">
+                <h3 className="text-[10px] md:text-xs font-black text-emerald-500 uppercase tracking-[0.22em] md:tracking-[0.3em]">
                     {heroBooks.some(b => (b.progress || 0) > 0) ? 'Tiếp tục nghe' : 'Sách mới nhất'}
                 </h3>
                 {heroBooks.length > 1 && (
@@ -38,13 +38,13 @@ export default function HeroCarousel({ heroBooks, activeHeroIndex, setActiveHero
                     const index = Math.round(container.scrollLeft / (itemWidth + gap));
                     if (index !== activeHeroIndex && index < heroBooks.length) setActiveHeroIndex(index);
                 }}
-                className="flex gap-4 overflow-x-auto pb-4 scrollbar-hide snap-x snap-mandatory -mx-4 px-4"
+                className="flex gap-3 md:gap-4 overflow-x-auto pb-3 md:pb-4 scrollbar-hide snap-x snap-mandatory -mx-3 px-3 md:-mx-4 md:px-4"
             >
                 {heroBooks.map((heroBook) => (
                     <div
                         key={heroBook.id}
                         onClick={() => setSelectedBookId(heroBook.id)}
-                        className="relative flex-shrink-0 w-[92vw] md:w-[750px] group cursor-pointer overflow-hidden rounded-[32px] border border-white/10 shadow-2xl active:scale-[0.98] transition-all duration-300 snap-center"
+                        className="relative flex-shrink-0 w-[calc(100vw-1.5rem)] max-w-full md:w-[750px] group cursor-pointer overflow-hidden rounded-3xl md:rounded-[32px] border border-white/10 shadow-2xl active:scale-[0.98] transition-all duration-300 snap-center"
                     >
                         <div className="absolute inset-0 z-0">
                             <img
@@ -55,9 +55,9 @@ export default function HeroCarousel({ heroBooks, activeHeroIndex, setActiveHero
                             <div className="absolute inset-0 bg-gradient-to-b from-slate-900/40 via-slate-900/60 to-slate-900" />
                         </div>
 
-                        <div className="relative z-10 flex flex-col p-5 md:p-8">
-                            <div className="flex flex-row items-start gap-6 w-full text-left">
-                                <div className="w-44 md:w-64 aspect-[2/3] flex-shrink-0 relative">
+                        <div className="relative z-10 flex flex-col p-4 md:p-8">
+                            <div className="flex flex-row items-start gap-4 md:gap-6 w-full text-left">
+                                <div className="w-28 sm:w-36 md:w-64 aspect-[2/3] flex-shrink-0 relative">
                                     <img
                                         src={resolveApiUrl(heroBook.coverImageUrl, '/default-cover.png')}
                                         className="h-full w-full object-cover rounded-xl shadow-2xl border border-white/10"
@@ -73,15 +73,15 @@ export default function HeroCarousel({ heroBooks, activeHeroIndex, setActiveHero
                                 </div>
                                 <div className="flex-1 min-w-0 flex flex-col justify-between self-stretch py-1">
                                     <div>
-                                        <h2 className="text-2xl md:text-5xl font-black text-white mb-2 font-playfair tracking-tight leading-tight line-clamp-2">
+                                        <h2 className="text-xl sm:text-2xl md:text-5xl font-black text-white mb-1.5 md:mb-2 font-playfair tracking-tight leading-tight line-clamp-2">
                                             {heroBook.title}
                                         </h2>
-                                        <p className="text-emerald-400/60 text-sm md:text-xl font-medium truncate italic mb-4">
+                                        <p className="text-emerald-400/60 text-xs sm:text-sm md:text-xl font-medium truncate italic mb-2 md:mb-4">
                                             {heroBook.author || 'Tác giả ẩn danh'}
                                         </p>
 
                                         {heroBook.currentText && (
-                                            <p className="text-slate-200 text-sm md:text-lg italic line-clamp-3 md:line-clamp-4 font-serif leading-relaxed border-l-4 border-emerald-500/30 pl-4 mb-6">
+                                            <p className="hidden min-[390px]:block text-slate-200 text-xs sm:text-sm md:text-lg italic line-clamp-2 md:line-clamp-4 font-serif leading-relaxed border-l-2 md:border-l-4 border-emerald-500/30 pl-3 md:pl-4 mb-3 md:mb-6">
                                                 "{heroBook.currentText}..."
                                             </p>
                                         )}
@@ -89,8 +89,8 @@ export default function HeroCarousel({ heroBooks, activeHeroIndex, setActiveHero
 
                                     <div className="w-full">
                                         <div className="mb-2 px-1 text-right">
-                                            <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px] md:text-xs">BẠN ĐÃ HOÀN THÀNH </span>
-                                            <span className="text-emerald-400 font-black text-xs md:text-sm">{heroBook.progress || 0}%</span>
+                                            <span className="text-slate-400 font-bold uppercase tracking-widest text-[8px] md:text-xs">BẠN ĐÃ HOÀN THÀNH </span>
+                                            <span className="text-emerald-400 font-black text-[10px] md:text-sm">{heroBook.progress || 0}%</span>
                                         </div>
                                         <div className="h-2 w-full bg-black/40 rounded-full overflow-hidden border border-white/5 p-0.5">
                                             <div

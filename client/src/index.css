@@ -8,15 +8,18 @@
 }
 
 @layer base {
+  html,
+  body,
+  #root {
+    min-height: 100%;
+  }
+
   body {
     font-family: 'Outfit', sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    /* iOS safe area support */
-    padding-top: env(safe-area-inset-top);
-    padding-bottom: env(safe-area-inset-bottom);
-    padding-left: env(safe-area-inset-left);
-    padding-right: env(safe-area-inset-right);
+    margin: 0;
+    overflow-x: hidden;
   }
 }
 
@@ -41,6 +44,48 @@
 }
 
 @layer utilities {
+
+  .ios-safe-page {
+    height: 100vh;
+    height: 100dvh;
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+
+  .ios-library-page {
+    min-height: 100vh;
+    min-height: 100dvh;
+    padding-top: calc(env(safe-area-inset-top) + 0.5rem);
+    padding-bottom: calc(env(safe-area-inset-bottom) + 1.25rem);
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+
+  .ios-safe-toast {
+    bottom: calc(env(safe-area-inset-bottom) + 1rem);
+  }
+
+  .ios-reader-header {
+    padding-top: calc(env(safe-area-inset-top) + 0.35rem);
+  }
+
+  .ios-reader-scroll {
+    position: absolute;
+    inset: 0;
+    box-sizing: border-box;
+    height: auto;
+    min-height: 0;
+    padding-top: calc(env(safe-area-inset-top) + 4.35rem);
+    padding-bottom: calc(env(safe-area-inset-bottom) + 7.75rem);
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
+    touch-action: pan-y;
+  }
+
+  .ios-reader-controls {
+    padding-bottom: calc(env(safe-area-inset-bottom) + 0.6rem);
+  }
 
   .scrollbar-hide::-webkit-scrollbar,
   .no-scrollbar::-webkit-scrollbar {

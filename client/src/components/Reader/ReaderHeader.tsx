@@ -33,24 +33,24 @@ const ReaderHeader: React.FC<ReaderHeaderProps> = ({
 
 
             {/* Header - Auto Hiding */}
-            <div className={`fixed top-0 left-0 right-0 backdrop-blur-3xl border-b p-4 z-50 transition-transform duration-500 ${showControls ? 'translate-y-0' : '-translate-y-full'} ${currentThemeStyles.header}`}>
-                <div className="container mx-auto flex items-center justify-between">
+            <div className={`fixed top-0 left-0 right-0 backdrop-blur-3xl border-b px-3 pb-2 ios-reader-header z-50 transition-transform duration-500 ${showControls ? 'translate-y-0' : '-translate-y-full'} ${currentThemeStyles.header}`}>
+                <div className="mx-auto flex w-full max-w-3xl items-center justify-between gap-2">
                     {/* Clean Header - Responsive Title */}
-                    <div className="flex items-center gap-4 cursor-pointer group" onClick={handleClose}>
-                        <div className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors ${currentThemeStyles.backBtn}`}>
+                    <div className="flex min-w-0 flex-1 items-center gap-2 cursor-pointer group" onClick={handleClose}>
+                        <div className={`h-9 w-9 shrink-0 rounded-full flex items-center justify-center transition-colors ${currentThemeStyles.backBtn}`}>
                             <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                             </svg>
                         </div>
-                        <h1 className={`text-lg md:text-xl font-black uppercase tracking-tight line-clamp-2 md:line-clamp-none flex-1 ${theme === 'sepia' ? 'text-[#433429]' : 'text-white'}`}>
+                        <h1 className={`min-w-0 flex-1 truncate text-sm font-black uppercase tracking-tight md:text-xl md:line-clamp-none ${theme === 'sepia' ? 'text-[#433429]' : 'text-white'}`}>
                             {book?.title}
                         </h1>
                     </div>
 
-                    <div className="flex gap-3">
+                    <div className="flex shrink-0 gap-2 md:gap-3">
                         <button
                             onClick={() => currentSegment && toggleBookmark(currentSegment)}
-                            className={`flex items-center justify-center w-10 h-10 rounded-full transition-all ${isBookmarked ? 'bg-yellow-500 text-white shadow-lg shadow-yellow-500/20' : currentThemeStyles.btn}`}
+                            className={`flex items-center justify-center h-9 w-9 md:w-10 md:h-10 rounded-full transition-all ${isBookmarked ? 'bg-yellow-500 text-white shadow-lg shadow-yellow-500/20' : currentThemeStyles.btn}`}
                             title={isBookmarked ? 'Xóa dấu trang' : 'Lưu dấu trang'}
                         >
                             <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill={isBookmarked ? "currentColor" : "none"} viewBox="0 0 24 24" stroke="currentColor">
@@ -63,7 +63,7 @@ const ReaderHeader: React.FC<ReaderHeaderProps> = ({
                                 setShowLibrary(!showLibrary);
                                 setShowSettings(false);
                             }}
-                            className={`flex items-center justify-center w-10 h-10 rounded-full transition-all ${showLibrary ? 'bg-blue-500 text-white shadow-lg shadow-blue-500/20' : currentThemeStyles.btn}`}
+                            className={`flex items-center justify-center h-9 w-9 md:w-10 md:h-10 rounded-full transition-all ${showLibrary ? 'bg-blue-500 text-white shadow-lg shadow-blue-500/20' : currentThemeStyles.btn}`}
                             title="Mục lục & Dấu trang"
                         >
                             <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
