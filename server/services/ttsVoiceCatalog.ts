@@ -57,6 +57,11 @@ const GROK_SINGLE_VOICES: Record<string, string> = {
     'grok-rex': 'rex',
     'grok-sal': 'sal',
     'grok-leo': 'leo',
+    // Rollback aliases for any client/localStorage values saved during the
+    // custom-voice experiment. xAI rejected those custom IDs for the current
+    // production API key, so route them back to built-in voices.
+    'grok-vietnamese-female': 'ara',
+    'grok-vietnamese-male': 'sal',
 };
 
 export function isSupportedGrokVoice(requestVoice: string): boolean {

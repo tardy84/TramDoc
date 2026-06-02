@@ -72,11 +72,25 @@ export const ENABLED_TTS_VOICES = [
         description: 'Giọng nữ Grok ấm, thân thiện, conversational',
     },
     {
+        id: 'grok-rex',
+        name: 'Rex',
+        provider: 'Grok · Built-in',
+        icon: '🦁',
+        description: 'Giọng Grok built-in Rex để test audiobook',
+    },
+    {
         id: 'grok-sal',
         name: 'Sal',
         provider: 'Grok · Nam',
         icon: '🌙',
         description: 'Giọng nam Grok mượt, ấm, versatile',
+    },
+    {
+        id: 'grok-leo',
+        name: 'Leo',
+        provider: 'Grok · Built-in',
+        icon: '☀️',
+        description: 'Giọng Grok built-in Leo để test audiobook',
     },
     { id: 'vbee-s_sg_male_thientam_ytstable_vc', name: 'Thiên Tâm', provider: 'Vbee', icon: '🎤' },
     { id: 'vbee-n_hanoi_female_nguyetnganhannha_story_vc', name: 'Nguyệt Nga', provider: 'Vbee', icon: '🌸' },
@@ -93,5 +107,17 @@ export const ENABLED_TTS_VOICES = [
     { id: 'minimax-mandarin-mature-woman', name: 'Mature Woman', provider: 'MiniMax · Nữ', icon: '👩' },
 ] as const;
 
+const TTS_VOICE_ALIASES: Record<string, string> = {
+    'grok-vietnamese-female': 'grok-ara',
+    'grok-vietnamese-male': 'grok-sal',
+};
+
+export const normalizeEnabledTtsVoice = (voice: string) => {
+    const normalizedVoice = TTS_VOICE_ALIASES[voice] || voice;
+    return ENABLED_TTS_VOICES.some(item => item.id === normalizedVoice)
+        ? normalizedVoice
+        : null;
+};
+
 export const isEnabledTtsVoice = (voice: string) =>
-    ENABLED_TTS_VOICES.some(item => item.id === voice);
+    normalizeEnabledTtsVoice(voice) !== null;

@@ -35,17 +35,19 @@ const grokTTS = new GrokTTSService();
 const generatingFiles = new Set<string>();
 const providerWarnings = new Set<string>();
 const audioDir = path.resolve(process.cwd(), 'audio');
-const AUDIO_TOKEN_TTL = '15m';
+const AUDIO_TOKEN_TTL = '2h';
 const TTS_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
-const TTS_RATE_LIMIT_MAX_REQUESTS = 20;
+const TTS_RATE_LIMIT_MAX_REQUESTS = 500;
 const TTS_GENERATION_MAX_ATTEMPTS = 2;
 const TTS_GENERATION_RETRY_DELAY_MS = 750;
+const TTS_GENERATING_FILE_WAIT_INTERVAL_MS = 500;
+const TTS_GENERATING_FILE_WAIT_TIMEOUT_MS = 2 * 60 * 1000;
 const VBEE_LOOKAHEAD_COUNT = 4;
 const VBEE_SHORT_SEGMENT_MAX_CHARS = 140;
 const VBEE_SHORT_RUN_MIN_SEGMENTS = 3;
 const VBEE_SHORT_RUN_LOOKAHEAD_COUNT = 5;
 const VBEE_SHORT_RUN_EARLY_WARMUP_COUNT = 3;
-const GROK_TTS_CACHE_VERSION = 'grok-tts-voice-id-v1';
+const GROK_TTS_CACHE_VERSION = 'grok-tts-voice-id-v2';
 const ttsRequests = new Map<number, { count: number; resetAt: number }>();
 type OfflineTtsQuality = 'low' | 'standard' | 'high';
 const DEFAULT_OFFLINE_TTS_QUALITY: OfflineTtsQuality = 'standard';
@@ -72,7 +74,7 @@ interface SegmentForAudioCache {
 function isSafeVoice(voice: unknown): voice is string {
     return typeof voice === 'string' &&
         voice.length > 0 &&
-        voice.length <= 120 &&
+        voice.length <= 160 &&
         /^[A-Za-z0-9._-]+$/.test(voice) &&
         !voice.includes('..');
 }
@@ -80,7 +82,7 @@ function isSafeVoice(voice: unknown): voice is string {
 function getVoiceValidationError(voice: unknown): string | null {
     if (!isSafeVoice(voice)) return 'Giọng đọc không hợp lệ';
     if (voice.startsWith('grok-') && !isSupportedGrokVoice(voice)) {
-        return 'Grok chỉ hỗ trợ giọng Ara hoặc Sal';
+        return 'Grok chỉ hỗ trợ giọng Nam/Nữ đã cấu hình';
     }
     return null;
 }
@@ -118,6 +120,7 @@ function buildSegmentAudioIdentity(
         segmentId: segment.id ?? null,
         provider: resolved.provider,
         providerCacheVersion: resolved.provider === 'grok' ? GROK_TTS_CACHE_VERSION : null,
+        providerVoiceId: resolved.provider === 'grok' ? resolved.providerVoiceId : null,
         cacheVoice,
         expressive,
         rendererVersion: rendered.rendererVersion,
@@ -534,12 +537,11 @@ async function generateSegment(bookId: number, chapterId: number, segmentIndex: 
     // 2. Check if currently generating (Dedup)
     if (generatingFiles.has(fileName)) {
         console.log(`[Audio] ⏳ File ${fileName} is already being generated. Waiting...`);
-        // Wait for it to finish (poll every 500ms, max 30s)
-        const MAX_WAIT = 60; // 30s / 0.5s
+        const maxAttempts = Math.ceil(TTS_GENERATING_FILE_WAIT_TIMEOUT_MS / TTS_GENERATING_FILE_WAIT_INTERVAL_MS);
         let attempts = 0;
 
-        while (generatingFiles.has(fileName) && attempts < MAX_WAIT) {
-            await new Promise(resolve => setTimeout(resolve, 500));
+        while (generatingFiles.has(fileName) && attempts < maxAttempts) {
+            await delay(TTS_GENERATING_FILE_WAIT_INTERVAL_MS);
             attempts++;
         }
 

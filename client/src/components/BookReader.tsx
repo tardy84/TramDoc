@@ -16,7 +16,7 @@ import { useReaderProgress } from './Reader/useReaderProgress';
 
 // Local database
 import { getBook, getBookmarks, createBookmark, deleteBookmark as deleteBookmarkApi } from '../services/apiService';
-import { DEFAULT_TTS_VOICE, isEnabledTtsVoice, resolveApiUrl } from '../constants';
+import { DEFAULT_TTS_VOICE, normalizeEnabledTtsVoice, resolveApiUrl } from '../constants';
 import { getErrorMessage } from '../utils/errors';
 
 const THEMES: Record<ThemeMode, ThemeStyles> = {
@@ -81,8 +81,12 @@ interface BookReaderProps {
 
 const getInitialReaderVoice = () => {
     const storedVoice = localStorage.getItem('reader_voice');
-    if (storedVoice && isEnabledTtsVoice(storedVoice)) {
-        return storedVoice;
+    const normalizedVoice = storedVoice ? normalizeEnabledTtsVoice(storedVoice) : null;
+    if (normalizedVoice) {
+        if (normalizedVoice !== storedVoice) {
+            localStorage.setItem('reader_voice', normalizedVoice);
+        }
+        return normalizedVoice;
     }
 
     localStorage.setItem('reader_voice', DEFAULT_TTS_VOICE);
@@ -415,7 +419,7 @@ export default function BookReader({ bookId, onClose }: BookReaderProps) {
                 setSleepTimer={setSleepTimer}
                 selectedVoice={selectedVoice}
                 setSelectedVoice={(voice) => {
-                    const safeVoice = isEnabledTtsVoice(voice) ? voice : DEFAULT_TTS_VOICE;
+                    const safeVoice = normalizeEnabledTtsVoice(voice) || DEFAULT_TTS_VOICE;
                     setSelectedVoice(safeVoice);
                     localStorage.setItem('reader_voice', safeVoice);
                 }}
@@ -436,7 +440,7 @@ export default function BookReader({ bookId, onClose }: BookReaderProps) {
                 book={book}
                 selectedVoice={selectedVoice}
                 setSelectedVoice={(voice) => {
-                    const safeVoice = isEnabledTtsVoice(voice) ? voice : DEFAULT_TTS_VOICE;
+                    const safeVoice = normalizeEnabledTtsVoice(voice) || DEFAULT_TTS_VOICE;
                     setSelectedVoice(safeVoice);
                     localStorage.setItem('reader_voice', safeVoice);
                 }}

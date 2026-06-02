@@ -6,9 +6,7 @@ import {
     DEFAULT_OFFLINE_TTS_QUALITY,
     ENABLED_TTS_VOICES,
     OFFLINE_TTS_QUALITIES,
-    getStoredOfflineTtsQuality,
     OfflineTtsQuality,
-    isExpensiveTtsVoice,
     providerSupportsOfflineBitrate,
 } from '../../constants';
 import {
@@ -169,6 +167,38 @@ const formatStorage = (bytes?: number) => {
     return `${Math.max(1, Math.round(bytes / 1024))} KB`;
 };
 
+const statusRank: Record<ChapterOfflineStatus['status'], number> = {
+    downloading: 5,
+    downloaded: 4,
+    partial: 3,
+    failed: 2,
+    not_downloaded: 1,
+};
+
+const isVisibleStatus = (status: ChapterOfflineStatus) =>
+    status.status !== 'not_downloaded';
+
+const pickBestChapterStatus = (
+    statuses: ChapterOfflineStatus[],
+    preferredQuality: OfflineTtsQuality
+) => {
+    const preferred = statuses.find(status =>
+        status.quality === preferredQuality &&
+        isVisibleStatus(status)
+    );
+    if (preferred) return preferred;
+
+    const fallback = statuses
+        .filter(isVisibleStatus)
+        .sort((a, b) => (
+            statusRank[b.status] - statusRank[a.status] ||
+            (b.updatedAt || 0) - (a.updatedAt || 0)
+        ))[0];
+    if (fallback) return fallback;
+
+    return statuses.find(status => status.quality === preferredQuality) || statuses[0];
+};
+
 const LibraryPanel: React.FC<LibraryPanelProps> = ({
     showLibrary,
     setShowLibrary,
@@ -191,31 +221,31 @@ const LibraryPanel: React.FC<LibraryPanelProps> = ({
     fontFamily,
     bookId
 }) => {
-    const [offlineQuality, setOfflineQuality] = React.useState<OfflineTtsQuality>(DEFAULT_OFFLINE_TTS_QUALITY);
     const [chapterStatuses, setChapterStatuses] = React.useState<Record<number, ChapterOfflineStatus>>({});
     const [chapterStorageUsage, setChapterStorageUsage] = React.useState<Record<number, number>>({});
     const [confirmDialog, setConfirmDialog] = React.useState<ConfirmDialogState | null>(null);
     const chapterAbortControllersRef = React.useRef<Record<number, AbortController>>({});
-    const effectiveOfflineQuality = providerSupportsOfflineBitrate(selectedVoice)
-        ? offlineQuality
-        : DEFAULT_OFFLINE_TTS_QUALITY;
+    const effectiveOfflineQuality = DEFAULT_OFFLINE_TTS_QUALITY;
 
     const refreshChapterStatuses = React.useCallback(async () => {
         if (!showLibrary || libraryTab !== 'toc') return;
         const statusAndUsage = await Promise.all(
-            chapters.map(async chapter => ({
-                status: await getChapterOfflineStatus(bookId, chapter.id, selectedVoice, effectiveOfflineQuality),
-                usage: await getOfflineChapterStorageUsage(bookId, chapter.id, selectedVoice, effectiveOfflineQuality),
-            }))
+            chapters.map(async chapter => {
+                const statuses = await Promise.all(
+                    OFFLINE_TTS_QUALITIES.map(item =>
+                        getChapterOfflineStatus(bookId, chapter.id, selectedVoice, item.id)
+                    )
+                );
+                const status = pickBestChapterStatus(statuses, effectiveOfflineQuality);
+                const usage = status && isVisibleStatus(status)
+                    ? await getOfflineChapterStorageUsage(bookId, chapter.id, status.voice, status.quality)
+                    : 0;
+                return { status, usage };
+            })
         );
         setChapterStatuses(Object.fromEntries(statusAndUsage.map(item => [item.status.chapterId, item.status])));
         setChapterStorageUsage(Object.fromEntries(statusAndUsage.map(item => [item.status.chapterId, item.usage])));
     }, [bookId, chapters, effectiveOfflineQuality, libraryTab, selectedVoice, showLibrary]);
-
-    React.useEffect(() => {
-        const storedQuality = getStoredOfflineTtsQuality();
-        setOfflineQuality(providerSupportsOfflineBitrate(selectedVoice) ? storedQuality : DEFAULT_OFFLINE_TTS_QUALITY);
-    }, [selectedVoice, showLibrary, libraryTab]);
 
     React.useEffect(() => {
         refreshChapterStatuses().catch(err => console.error('[Offline chapter] Status refresh failed:', err));
@@ -252,35 +282,9 @@ const LibraryPanel: React.FC<LibraryPanelProps> = ({
         const existing = chapterStatuses[chapter.id];
         if (existing?.status === 'downloading') return;
 
-        const isExpensiveProvider = isExpensiveTtsVoice(selectedVoice);
-        let downloadVoice = selectedVoice;
-        let downloadQuality = effectiveOfflineQuality;
-        if (isExpensiveProvider) {
-            const confirmed = await confirmAction({
-                title: 'Tải giọng đọc cho chương?',
-                message: 'Tác vụ này có thể dùng quota của provider. Nên tải từng chương trước để kiểm soát chi phí.',
-                details: [
-                    chapter.title || `Chương ${chapter.orderIndex + 1}`,
-                ],
-                downloadOptions: {
-                    voice: selectedVoice,
-                    quality: effectiveOfflineQuality,
-                },
-                confirmText: 'Tiếp tục tải',
-                tone: 'warning',
-            });
-            if (!confirmed) return;
-            if (typeof confirmed === 'object') {
-                downloadVoice = confirmed.voice;
-                downloadQuality = confirmed.quality;
-            }
-        }
-        downloadQuality = providerSupportsOfflineBitrate(downloadVoice) ? downloadQuality : DEFAULT_OFFLINE_TTS_QUALITY;
-        if (downloadVoice !== selectedVoice) setSelectedVoice(downloadVoice);
-        if (downloadQuality !== offlineQuality) {
-            setOfflineQuality(downloadQuality);
-            localStorage.setItem('offline_tts_quality', downloadQuality);
-        }
+        const downloadVoice = selectedVoice;
+        const downloadQuality = DEFAULT_OFFLINE_TTS_QUALITY;
+        localStorage.setItem('offline_tts_quality', downloadQuality);
 
         const downloadExisting = await getChapterOfflineStatus(bookId, chapter.id, downloadVoice, downloadQuality);
 
@@ -338,9 +342,11 @@ const LibraryPanel: React.FC<LibraryPanelProps> = ({
         }
     };
 
-    const cancelChapterDownload = async (chapterId: number) => {
+    const cancelChapterDownload = async (chapterId: number, status?: ChapterOfflineStatus) => {
+        const statusVoice = status?.voice || selectedVoice;
+        const statusQuality = status?.quality || effectiveOfflineQuality;
         chapterAbortControllersRef.current[chapterId]?.abort();
-        const latest = await getChapterOfflineStatus(bookId, chapterId, selectedVoice, effectiveOfflineQuality);
+        const latest = await getChapterOfflineStatus(bookId, chapterId, statusVoice, statusQuality);
         const nextStatus: ChapterOfflineStatus = latest.downloadedSegments > 0
             ? { ...latest, status: 'partial', updatedAt: Date.now() }
             : { ...latest, status: 'not_downloaded', updatedAt: Date.now() };
@@ -348,22 +354,24 @@ const LibraryPanel: React.FC<LibraryPanelProps> = ({
         await setChapterOfflineStatus(nextStatus);
     };
 
-    const deleteChapterAudio = async (chapterId: number) => {
+    const deleteChapterAudio = async (chapterId: number, status?: ChapterOfflineStatus) => {
         const chapter = chapters.find(item => item.id === chapterId);
+        const statusVoice = status?.voice || selectedVoice;
+        const statusQuality = status?.quality || effectiveOfflineQuality;
         const confirmed = await confirmAction({
             title: 'Xoá audio offline?',
             message: 'Chỉ audio của chương này, giọng này và chất lượng này bị xoá. Metadata sách và các chương khác vẫn được giữ lại.',
             details: [
                 chapter?.title || `Chương ${chapterId}`,
-                `Giọng: ${selectedVoice}`,
-                `Chất lượng: ${effectiveOfflineQuality}`,
+                `Giọng: ${statusVoice}`,
+                `Chất lượng: ${statusQuality}`,
             ],
             confirmText: 'Xoá audio',
             tone: 'danger',
         });
         if (!confirmed) return;
 
-        await deleteOfflineChapterAudio(bookId, chapterId, selectedVoice, effectiveOfflineQuality);
+        await deleteOfflineChapterAudio(bookId, chapterId, statusVoice, statusQuality);
         const latest = await getChapterOfflineStatus(bookId, chapterId, selectedVoice, effectiveOfflineQuality);
         setChapterStatus(latest);
         await refreshChapterStorageUsage(chapterId);
@@ -373,7 +381,11 @@ const LibraryPanel: React.FC<LibraryPanelProps> = ({
         if (!status || status.status === 'not_downloaded') return { label: 'Chưa tải', action: 'Tải chương' };
         if (status.status === 'downloading') return { label: `Đang chuẩn bị ${status.downloadedSegments}/${status.totalSegments || '?'}`, action: 'Huỷ tải' };
         const storage = formatStorage(chapterStorageUsage[status.chapterId]);
-        const suffix = storage ? ` · ${storage}` : '';
+        const qualityLabel = OFFLINE_TTS_QUALITIES.find(item => item.id === status.quality)?.label || status.quality;
+        const qualitySuffix = providerSupportsOfflineBitrate(status.voice) && status.quality !== DEFAULT_OFFLINE_TTS_QUALITY
+            ? ` · ${qualityLabel}`
+            : '';
+        const suffix = `${qualitySuffix}${storage ? ` · ${storage}` : ''}`;
         if (status.status === 'downloaded') return { label: `Đã tải${suffix}`, action: 'Xoá audio' };
         if (status.status === 'partial') return { label: `Tải một phần ${status.downloadedSegments}/${status.totalSegments || '?'}${suffix}`, action: 'Tải tiếp' };
         return { label: 'Lỗi', action: 'Tải lại' };
@@ -453,7 +465,7 @@ const LibraryPanel: React.FC<LibraryPanelProps> = ({
                                             {hasDownloadedAudio && (
                                                 <button
                                                     type="button"
-                                                    onClick={() => deleteChapterAudio(chapter.id)}
+                                                    onClick={() => deleteChapterAudio(chapter.id, status)}
                                                     className="text-[10px] font-bold text-red-300/70 hover:text-red-200"
                                                 >
                                                     Xoá audio
@@ -461,7 +473,7 @@ const LibraryPanel: React.FC<LibraryPanelProps> = ({
                                             )}
                                             <button
                                                 type="button"
-                                                onClick={() => isDownloading ? cancelChapterDownload(chapter.id) : downloadChapter(chapter)}
+                                                onClick={() => isDownloading ? cancelChapterDownload(chapter.id, status) : downloadChapter(chapter)}
                                                 className="rounded-lg bg-cyan-500/15 px-2 py-1 text-[10px] font-bold text-cyan-200 hover:bg-cyan-500/25"
                                             >
                                                 {isDownloading ? 'Huỷ tải' : copy.action === 'Xoá audio' ? 'Tải lại' : copy.action}

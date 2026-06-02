@@ -106,6 +106,7 @@ export const useReaderAudio = ({
         audio.playbackRate = playbackSpeed;
         audio.preload = 'auto';
         audio.setAttribute('playsinline', 'true');
+        audio.load();
         return audio;
     }, [playbackSpeed]);
 
@@ -529,12 +530,6 @@ export const useReaderAudio = ({
         pausedAudioRef.current = null;
         setHasAudioSession(true);
 
-        let offlineStartTimeout: ReturnType<typeof setTimeout> | null = null;
-        const clearOfflineStartTimeout = () => {
-            if (!offlineStartTimeout) return;
-            clearTimeout(offlineStartTimeout);
-            offlineStartTimeout = null;
-        };
         const fallbackFromBadOfflineAudio = (reason = 'offline audio did not start') => {
             const badOfflineAudio = markBadOfflineAudio(audio);
             if (!badOfflineAudio) return false;
@@ -555,7 +550,6 @@ export const useReaderAudio = ({
                 });
                 setAudioError('Audio offline trên máy bị lỗi, đang xoá đoạn hỏng và phát từ server...');
             }
-            clearOfflineStartTimeout();
             fallbackToServerAudio(audio);
             return true;
         };
@@ -583,13 +577,12 @@ export const useReaderAudio = ({
                     }
                 }, 500);
             } else {
-                stopAudioPlayback(`[Audio] Không phát được audio Vbee ở đoạn ${index + 1}. Kiểm tra API/audio URL rồi thử lại.`);
+                stopAudioPlayback(`[Audio] Không phát được audio ở đoạn ${index + 1}. Kiểm tra API/audio URL rồi thử lại.`);
             }
         };
 
         audio.onended = () => {
             if (activeChapterIdRef.current !== chapterId) return;
-            clearOfflineStartTimeout();
             revokeOfflineObjectUrl(audio.src);
             if (audio.dataset.offlineKey) {
                 audio.removeAttribute('src');
@@ -620,33 +613,20 @@ export const useReaderAudio = ({
         };
 
         audio.onplaying = () => {
-            clearOfflineStartTimeout();
+            // no-op; kept explicit so future playback hooks can attach safely.
         };
         if (audio.dataset.offlineKey) {
             audio.ontimeupdate = () => {
-                if (audio.currentTime > 0.1) {
-                    clearOfflineStartTimeout();
-                }
+                // Offline blobs from IndexedDB can take several seconds to decode
+                // on mobile browsers. Do not treat slow startup as corrupt cache;
+                // actual media errors are handled by onerror/play() rejection.
             };
-            offlineStartTimeout = setTimeout(() => {
-                if (
-                    currentPlayId !== playIdRef.current ||
-                    activeChapterIdRef.current !== chapterId ||
-                    !audio.dataset.offlineKey ||
-                    audio.ended
-                ) return;
-
-                if (audio.paused || audio.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || audio.currentTime <= 0.1) {
-                    fallbackFromBadOfflineAudio('offline audio made no audible progress');
-                }
-            }, 3000);
         }
 
         audio.play().catch(error => {
             if (error.name === 'AbortError') return;
             if (currentPlayId !== playIdRef.current) return;
             if (error.name === 'NotAllowedError') {
-                clearOfflineStartTimeout();
                 stopAudioPlayback('[Audio] Trình duyệt chặn tự phát. Bấm phát lại để nghe tiếp.', error);
                 return;
             }
@@ -658,7 +638,7 @@ export const useReaderAudio = ({
                     }
                 }, 500);
             } else {
-                stopAudioPlayback(`[Audio] Trình phát từ chối phát Vbee ở đoạn ${index + 1}. Hãy thử bấm phát lại.`, error);
+                stopAudioPlayback(`[Audio] Trình phát từ chối phát audio ở đoạn ${index + 1}. Hãy thử bấm phát lại.`, error);
             }
         });
 
@@ -807,7 +787,7 @@ export const useReaderAudio = ({
             if (isAbortError(error) || controller.signal.aborted) return;
             console.error('[TTS] Server API Error:', error);
             setGenerating(false);
-            stopAudioPlayback(`[TTS] Không tạo được audio Vbee từ server. ${getErrorMessage(error, 'Vui lòng thử lại sau.')}`, error);
+            stopAudioPlayback(`[TTS] Không tạo được audio từ server. ${getErrorMessage(error, 'Vui lòng thử lại sau.')}`, error);
         } finally {
             if (activeChapterIdRef.current === chapter.id) {
                 setGenerating(false);
@@ -869,7 +849,7 @@ export const useReaderAudio = ({
         generateAudio(targetIndex);
     }, [audioFiles, chapters, currentChapterIndex, findNextSpeakableSegmentIndex, findOfflineAudioIndex, findPlayableUrlIndex, generateAudio, nextChapter, playAudio, primeAudioForUserGesture, setChapters]);
 
-    const togglePlayPause = useCallback(() => {
+    const togglePlayPause = useCallback(async () => {
         if (browserTTSMode) {
             if (isPlaying) {
                 window.speechSynthesis.pause();
@@ -906,7 +886,45 @@ export const useReaderAudio = ({
             setIsPlaying(false);
         } else {
             const chapter = chapters[currentChapterIndex];
-            if (chapter && resumePausedAudio(chapter.id)) return;
+            if (chapter && pausedAudioRef.current?.audio.dataset.offlineKey && resumePausedAudio(chapter.id)) return;
+
+            if (chapter) {
+                const targetIndex = findNextSpeakableSegmentIndex(currentSegmentIndex);
+                const offlineStart = targetIndex === null ? null : await findOfflineAudioIndex(chapter.id, targetIndex);
+                if (offlineStart !== null) {
+                    const clickPlayId = ++playIdRef.current;
+                    activeChapterIdRef.current = chapter.id;
+                    if (abortControllerRef.current) {
+                        abortControllerRef.current.abort();
+                        abortControllerRef.current = null;
+                    }
+
+                    const currentGlobal = getGlobalAudio();
+                    if (currentGlobal) {
+                        currentGlobal.pause();
+                        revokeOfflineObjectUrl(currentGlobal.src);
+                        if (currentGlobal.dataset.offlineKey) {
+                            currentGlobal.removeAttribute('src');
+                            currentGlobal.load();
+                            currentGlobal.remove();
+                        } else {
+                            currentGlobal.src = '';
+                        }
+                        setGlobalAudio(null);
+                    }
+                    audioRef.current = null;
+                    pausedAudioRef.current = null;
+                    activeUrlMapRef.current.clear();
+                    clearPreloadedAudio();
+                    offlinePlaybackQualityRef.current = offlineStart.quality;
+                    setAudioFiles([]);
+                    setChapters(prev => prev.map((c, idx) => idx === currentChapterIndex ? { ...c, audioFiles: [] } : c));
+                    playAudio(offlineStart.index, [], 0, clickPlayId);
+                    return;
+                }
+
+                if (resumePausedAudio(chapter.id)) return;
+            }
 
             const audio = getGlobalAudio() || audioRef.current;
             if (audio && audio.src && !audio.ended) {
@@ -923,7 +941,7 @@ export const useReaderAudio = ({
                 generateAudio();
             }
         }
-    }, [browserTTSMode, chapters, currentChapterIndex, currentSegmentIndex, isPlaying, generateAudio, getGlobalAudio, playbackSpeed, resumePausedAudio, setGlobalAudio, stopAudioPlayback]);
+    }, [browserTTSMode, chapters, clearPreloadedAudio, currentChapterIndex, currentSegmentIndex, findNextSpeakableSegmentIndex, findOfflineAudioIndex, generateAudio, getGlobalAudio, isPlaying, playAudio, playbackSpeed, resumePausedAudio, revokeOfflineObjectUrl, setChapters, setGlobalAudio, stopAudioPlayback]);
 
     const nextSegment = useCallback(() => {
         const currentChapter = chapters[currentChapterIndex];
