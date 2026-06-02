@@ -92,6 +92,47 @@ try {
                 maxSegmentLength,
                 firstTitles: book.chapters.slice(0, 5).map(chapter => chapter.title),
             }));
+
+            // Surface role distribution so we can see whether multi-voice
+            // profile segments (narrator / heading / male / female / child)
+            // are actually being produced. Don't fail on absence of male/
+            // female/child — some fixtures have no dialogue — but fail if
+            // every segment has an empty/invalid role string.
+            const roleCounts = await prisma.textSegment.groupBy({
+                by: ['role'],
+                where: { chapter: { bookId: book.id } },
+                _count: { role: true },
+            });
+            const totalRoleSegments = roleCounts.reduce((sum, entry) => sum + entry._count.role, 0);
+            const validRoles = roleCounts.filter(entry => typeof entry.role === 'string' && entry.role.length > 0);
+            assertCondition(validRoles.length > 0, `${path.basename(fixture.file)} produced no valid role labels`);
+            assertCondition(totalRoleSegments === segments.length, `${path.basename(fixture.file)} role count mismatch: ${totalRoleSegments} vs ${segments.length}`);
+            console.log('[EPUB Smoke] role counts:', roleCounts.map(entry => ({ role: entry.role, count: entry._count.role })));
+
+            const sampledSegments = await prisma.textSegment.findMany({
+                where: { chapter: { bookId: book.id } },
+                orderBy: { id: 'asc' },
+                take: 50,
+                select: { role: true, ttsHints: true },
+            });
+            assertCondition(sampledSegments.length > 0, `${path.basename(fixture.file)} produced no sampled segments`);
+
+            let hintsWithJson = 0;
+            for (const segment of sampledSegments) {
+                assertCondition(typeof segment.role === 'string' && segment.role.length > 0, `${path.basename(fixture.file)} produced sampled segment without role`);
+                if (!segment.ttsHints) continue;
+
+                const parsed = JSON.parse(segment.ttsHints) as { version?: unknown; tone?: unknown; pace?: unknown; confidence?: unknown };
+                assertCondition(parsed.version === 1, `${path.basename(fixture.file)} ttsHints version mismatch`);
+                assertCondition(typeof parsed.tone === 'string' && parsed.tone.length > 0, `${path.basename(fixture.file)} ttsHints missing tone`);
+                assertCondition(typeof parsed.pace === 'string' && parsed.pace.length > 0, `${path.basename(fixture.file)} ttsHints missing pace`);
+                assertCondition(typeof parsed.confidence === 'number', `${path.basename(fixture.file)} ttsHints missing confidence`);
+                hintsWithJson++;
+            }
+
+            const minHints = Math.ceil(sampledSegments.length * 0.8);
+            assertCondition(hintsWithJson >= minHints, `${path.basename(fixture.file)} ttsHints coverage too low: ${hintsWithJson}/${sampledSegments.length}`);
+            console.log(`[smoke-epub] ttsHints coverage: ${hintsWithJson}/${sampledSegments.length} sampled segments`);
         } finally {
             if (bookId) {
                 await cleanupBook(bookId, coverImagePath);

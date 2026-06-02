@@ -8,21 +8,14 @@ export class MiniMaxTTSService {
 
     async synthesize(
         text: string,
-        role: 'narrator' | 'male' | 'female',
-        voiceOverride?: string
+        role: 'narrator' | 'male' | 'female' | string,
+        voiceOverride?: string,
+        options?: { bitrate?: number }
     ): Promise<Buffer> {
-        let voiceId = this.defaultVoice;
-        
-        if (voiceOverride) {
-            // Loại bỏ tiền tố 'minimax-' nếu được pass vào từ voice string
-            voiceId = voiceOverride.replace('minimax-', '');
-        } else {
-            if (role === 'female') {
-                voiceId = 'female-shaonv';
-            } else if (role === 'male') {
-                voiceId = 'male-qn-qingse';
-            }
-        }
+        // When the caller supplies `voiceOverride`, it is treated as the
+        // *raw* MiniMax `voice_id` (resolved upstream by `ttsVoiceCatalog`).
+        // This decouples the provider call from safe UI/cache IDs.
+        const voiceId = voiceOverride || this.getDefaultVoiceForRole(role);
 
         try {
             const response = await axios.post(
@@ -39,7 +32,7 @@ export class MiniMaxTTSService {
                     },
                     audio_setting: {
                         sample_rate: 32000,
-                        bitrate: 128000,
+                        bitrate: options?.bitrate ?? 128000,
                         format: 'mp3',
                         channel: 1
                     }
@@ -66,6 +59,18 @@ export class MiniMaxTTSService {
              console.error('[MiniMaxTTS] Error:', error?.response?.data || error.message);
              throw error;
         }
+    }
+
+    /**
+     * Pick a sensible default raw MiniMax `voice_id` for a given role.
+     * Used only when no `voiceOverride` is supplied (i.e. the caller has
+     * not run `resolveTtsVoice` upstream). Keeps prior single-voice
+     * behaviour without changing the public method signature.
+     */
+    private getDefaultVoiceForRole(role: 'narrator' | 'male' | 'female' | string): string {
+        if (role === 'female') return 'Chinese (Mandarin)_Mature_Woman';
+        if (role === 'male') return 'Chinese (Mandarin)_Gentleman';
+        return 'male-qn-qingse';
     }
 
     async synthesizeSegments(

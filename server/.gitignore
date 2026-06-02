@@ -2,6 +2,7 @@ node_modules
 .env
 audio/
 uploads/
+tmp/
 *.db
 *.db-journal
 *.out

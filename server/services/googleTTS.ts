@@ -28,7 +28,8 @@ export class GoogleTTSService {
     async synthesize(
         text: string,
         role: 'narrator' | 'male' | 'female',
-        voiceOverride?: string
+        voiceOverride?: string,
+        _options?: { bitrate?: number }
     ): Promise<Buffer> {
         const apiKey = this.getApiKey();
 

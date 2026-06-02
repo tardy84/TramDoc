@@ -26,7 +26,8 @@ export class VbeeTTSService {
     async synthesize(
         text: string,
         role: 'narrator' | 'male' | 'female',
-        voiceOverride?: string
+        voiceOverride?: string,
+        _options?: { bitrate?: number }
     ): Promise<Buffer> {
         if (!VBEE_APP_ID || !VBEE_TOKEN) {
             throw new Error('Vbee TTS is not configured on the server (missing VBEE_APP_ID/VBEE_TOKEN).');

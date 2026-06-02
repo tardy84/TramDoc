@@ -7,6 +7,7 @@ import ReaderControls from './Reader/ReaderControls';
 import LibraryPanel from './Reader/LibraryPanel';
 import SettingsPanel from './Reader/SettingsPanel';
 import BookmarkModal from './Reader/BookmarkModal';
+import { LibraryTab } from './Reader/LibraryPanel';
 
 // Types & Hooks
 import { ThemeMode, ThemeStyles, Book, Chapter, Bookmark, Segment } from './Reader/types';
@@ -101,7 +102,7 @@ export default function BookReader({ bookId, onClose }: BookReaderProps) {
     const [showControls, setShowControls] = useState(true);
     const [showSettings, setShowSettings] = useState(false);
     const [showLibrary, setShowLibrary] = useState(false);
-    const [libraryTab, setLibraryTab] = useState<'toc' | 'bookmarks'>('toc');
+    const [libraryTab, setLibraryTab] = useState<LibraryTab>('toc');
     const [isRestored, setIsRestored] = useState(false);
 
     // Theme & Layout
@@ -337,10 +338,7 @@ export default function BookReader({ bookId, onClose }: BookReaderProps) {
                                     <div
                                         key={segment.id}
                                         ref={el => segmentRefs.current[index] = el}
-                                        onClick={() => {
-                                            if (audio.audioFiles[index]) audio.playAudio(index, audio.audioFiles);
-                                            else audio.generateAudio(index);
-                                        }}
+                                        onClick={() => audio.playSegment(index)}
                                         className={`group relative inline-block w-full rounded-xl transition-all duration-500 cursor-pointer ${segment.role === 'heading' ? 'text-center mb-12 mt-16 block' : 'py-1.5 px-3'} ${index === currentSegmentIndex
                                             ? currentThemeStyles.active + ' scale-[1.02] z-10'
                                             : (theme === 'sepia' ? 'hover:bg-[#d3c2a3]/40' : 'hover:bg-white/5')
@@ -364,6 +362,7 @@ export default function BookReader({ bookId, onClose }: BookReaderProps) {
                 showControls={showControls}
                 theme={theme}
                 isPlaying={audio.isPlaying}
+                hasAudioSession={audio.hasAudioSession}
                 generating={audio.generating}
                 audioError={audio.audioError}
                 audioFiles={audio.audioFiles}
@@ -423,6 +422,13 @@ export default function BookReader({ bookId, onClose }: BookReaderProps) {
                 libraryTab={libraryTab}
                 setLibraryTab={setLibraryTab}
                 theme={theme}
+                book={book}
+                selectedVoice={selectedVoice}
+                setSelectedVoice={(voice) => {
+                    const safeVoice = isEnabledTtsVoice(voice) ? voice : DEFAULT_TTS_VOICE;
+                    setSelectedVoice(safeVoice);
+                    localStorage.setItem('reader_voice', safeVoice);
+                }}
                 chapters={chapters}
                 currentChapterIndex={currentChapterIndex}
                 setCurrentChapterIndex={setCurrentChapterIndex}

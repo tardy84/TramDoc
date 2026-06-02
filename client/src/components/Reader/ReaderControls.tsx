@@ -5,6 +5,7 @@ interface ReaderControlsProps {
     showControls: boolean;
     theme: ThemeMode;
     isPlaying: boolean;
+    hasAudioSession: boolean;
     generating: boolean;
     audioError?: string | null;
     audioFiles: string[];
@@ -27,6 +28,7 @@ const ReaderControls: React.FC<ReaderControlsProps> = ({
     showControls,
     theme,
     isPlaying,
+    hasAudioSession,
     generating,
     audioError,
     audioFiles,
@@ -95,7 +97,7 @@ const ReaderControls: React.FC<ReaderControlsProps> = ({
                             </button>
 
                             {/* Play/Pause */}
-                            {audioFiles.length === 0 ? (
+                            {!hasAudioSession && audioFiles.length === 0 ? (
                                 <button
                                     onClick={() => generateAudio()}
                                     disabled={generating}

@@ -4,11 +4,14 @@ import { promisify } from 'util';
 import path from 'path';
 import { PrismaClient } from '@prisma/client';
 import * as cheerio from 'cheerio';
+import { inferProsody, ProsodyContext } from './epubProsodyAnalyzer.js';
+import { serializeTtsHints } from './ttsHints.js';
 
 const parseXml = promisify(parseString);
 const prisma = new PrismaClient({});
 
-type SegmentRole = 'narrator' | 'heading';
+type SegmentRole = 'narrator' | 'heading' | 'male' | 'female' | 'child';
+type ExtractedSegmentContext = ProsodyContext;
 
 export class EpubProcessor {
     /**
@@ -336,7 +339,7 @@ export class EpubProcessor {
         bookTitle: string,
         author?: string
     ): Promise<boolean> {
-        const { segmentTexts, segmentRoles } = this.extractSegments(html, chapterTitle, bookTitle, author);
+        const { segmentTexts, segmentRoles, segmentContexts } = this.extractSegments(html, chapterTitle, bookTitle, author);
         if (isTableOfContents || this.isTableOfContentsDocument(segmentTexts)) {
             return false;
         }
@@ -353,12 +356,26 @@ export class EpubProcessor {
             },
         });
 
-        const segmentData = segmentTexts.map((content, i) => ({
-            content,
-            role: segmentRoles[i] as any,
-            chapterId: chapter.id,
-            orderIndex: i,
-        }));
+        let previousRole: SegmentRole | undefined;
+        let previousText: string | undefined;
+        const segmentData = segmentTexts.map((content, i) => {
+            const initialRole = segmentRoles[i] as SegmentRole;
+            const prosody = inferProsody(content, initialRole, {
+                ...segmentContexts[i],
+                previousRole,
+                previousText,
+            });
+            previousRole = prosody.role;
+            previousText = content;
+
+            return {
+                content,
+                role: prosody.role as any,
+                ttsHints: serializeTtsHints(prosody.hints),
+                chapterId: chapter.id,
+                orderIndex: i,
+            };
+        });
 
         await prisma.textSegment.createMany({
             data: segmentData,
@@ -372,7 +389,7 @@ export class EpubProcessor {
         chapterTitle: string,
         bookTitle: string,
         author?: string
-    ): { segmentTexts: string[]; segmentRoles: SegmentRole[] } {
+    ): { segmentTexts: string[]; segmentRoles: SegmentRole[]; segmentContexts: ExtractedSegmentContext[] } {
         const $ = cheerio.load(html);
 
         // Remove noise
@@ -393,6 +410,7 @@ export class EpubProcessor {
 
         const segmentTexts: string[] = [];
         const segmentRoles: SegmentRole[] = [];
+        const segmentContexts: ExtractedSegmentContext[] = [];
         const semanticSelector = 'h1, h2, h3, h4, h5, h6, p, li, blockquote';
         const semanticBlocks = $('body').find(semanticSelector);
         const leafDivBlocks = $('body').find('div').filter((_, el) =>
@@ -411,6 +429,12 @@ export class EpubProcessor {
         blocks.each((_, el) => {
             const $el = $(el);
             const isHeading = $el.is('h1, h2, h3, h4, h5, h6');
+            const context: ExtractedSegmentContext = {
+                isHeading,
+                tagName: String($el.prop('tagName') || '').toLowerCase(),
+                blockClass: $el.attr('class'),
+                blockId: $el.attr('id'),
+            };
 
             // Skip semantic containers with nested semantic content to avoid duplicate text.
             if ($el.is('li, blockquote') && $el.find(semanticSelector).length > 0) return;
@@ -428,12 +452,13 @@ export class EpubProcessor {
                     if (this.isDecorativeSeparator(s)) return;
                     if (this.isBookMetadataText(s, bookTitle, author)) return;
                     segmentTexts.push(s);
-                    segmentRoles.push(isHeading ? 'heading' : 'narrator');
+                    segmentRoles.push(isHeading ? 'heading' : this.inferSegmentRole(s));
+                    segmentContexts.push(context);
                 });
             });
         });
 
-        return this.deduplicateRepeatedShortNoise(segmentTexts, segmentRoles, chapterTitle, bookTitle, author);
+        return this.deduplicateRepeatedShortNoise(segmentTexts, segmentRoles, segmentContexts, chapterTitle, bookTitle, author);
     }
 
     private normalizeBlockText(text: string): string {
@@ -457,10 +482,11 @@ export class EpubProcessor {
     private deduplicateRepeatedShortNoise(
         segmentTexts: string[],
         segmentRoles: SegmentRole[],
+        segmentContexts: ExtractedSegmentContext[],
         chapterTitle: string,
         bookTitle: string,
         author?: string
-    ): { segmentTexts: string[]; segmentRoles: SegmentRole[] } {
+    ): { segmentTexts: string[]; segmentRoles: SegmentRole[]; segmentContexts: ExtractedSegmentContext[] } {
         const counts = new Map<string, number>();
         const seen = new Set<string>();
         const normalizedChapterTitle = this.normalizeForComparison(chapterTitle);
@@ -474,6 +500,7 @@ export class EpubProcessor {
 
         const dedupedTexts: string[] = [];
         const dedupedRoles: SegmentRole[] = [];
+        const dedupedContexts: ExtractedSegmentContext[] = [];
 
         segmentTexts.forEach((text, index) => {
             const role = segmentRoles[index];
@@ -491,9 +518,10 @@ export class EpubProcessor {
 
             dedupedTexts.push(text);
             dedupedRoles.push(role);
+            dedupedContexts.push(segmentContexts[index]);
         });
 
-        return { segmentTexts: dedupedTexts, segmentRoles: dedupedRoles };
+        return { segmentTexts: dedupedTexts, segmentRoles: dedupedRoles, segmentContexts: dedupedContexts };
     }
 
     private isShortDedupCandidate(text: string, normalizedText: string, normalizedChapterTitle: string): boolean {
@@ -595,6 +623,44 @@ export class EpubProcessor {
             .replace(/[^a-z0-9\s]/g, ' ')
             .replace(/\s+/g, ' ')
             .trim();
+    }
+
+    /**
+     * Best-effort, rule-based role inference for a TTS segment.
+     *
+     * Conservative by design: pure narration stays `narrator`. Lines that
+     * look like dialogue (contain quotes, start with a dash, or carry a
+     * Vietnamese attribution marker such as "cô nói", "anh nói", "nàng nói")
+     * get a male/female hint. Anything ambiguous falls back to `narrator`.
+     *
+     * `currentSpeakerHint` is reserved for future cross-segment speaker
+     * tracking; we intentionally do not propagate a single role across
+     * long narrator paragraphs in this slice.
+     */
+    private inferSegmentRole(text: string, currentSpeakerHint?: SegmentRole): SegmentRole {
+        const trimmed = text.trim();
+        if (!trimmed) return 'narrator';
+
+        const hasQuotes = /["“”‘’'«»]/.test(trimmed);
+        const hasDashLead = /^[-–—]/.test(trimmed);
+        if (!hasQuotes && !hasDashLead) return 'narrator';
+
+        const normalized = this.normalizeForComparison(trimmed);
+        if (!normalized) return 'narrator';
+
+        const femaleMarkers = [
+            'nang noi', 'co noi', 'ba noi', 'me noi', 'chi noi', 'em gai noi',
+            'giong nang', 'giong co', 'giong ba', 'giong me',
+        ];
+        const maleMarkers = [
+            'chang noi', 'anh noi', 'ong noi', 'bo noi', 'cha noi', 'cau noi',
+            'giong chang', 'giong anh', 'giong ong', 'giong bo',
+        ];
+
+        if (femaleMarkers.some(marker => normalized.includes(marker))) return 'female';
+        if (maleMarkers.some(marker => normalized.includes(marker))) return 'male';
+
+        return currentSpeakerHint || 'narrator';
     }
 
     /**

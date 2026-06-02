@@ -16,7 +16,8 @@ export class AzureTTSService {
     async synthesize(
         text: string,
         role: 'narrator' | 'male' | 'female',
-        voiceOverride?: string
+        voiceOverride?: string,
+        _options?: { bitrate?: number }
     ): Promise<Buffer> {
         if (!AZURE_SPEECH_KEY || !AZURE_SPEECH_REGION) {
             throw new Error('Azure TTS is not configured on the server (missing AZURE_SPEECH_KEY/AZURE_SPEECH_REGION). Use client-side API key in Settings.');

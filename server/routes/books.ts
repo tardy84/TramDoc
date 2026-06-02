@@ -6,6 +6,7 @@ import fs from 'fs/promises';
 import { authenticateJWT, AuthRequest } from '../middleware/auth.js';
 import { EpubProcessor } from '../services/epubProcessor.js';
 import { cleanupBookFiles } from '../services/bookFileCleanup.js';
+import { reanalyzeBookTtsHints } from '../services/ttsHintsBackfill.js';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -242,6 +243,24 @@ router.get('/books/:id', authenticateJWT, async (req: AuthRequest, res: Response
         });
     } catch (error: any) {
         res.status(500).json({ error: error.message });
+    }
+});
+
+router.post('/books/:id/reanalyze-tts-hints', authenticateJWT, async (req: AuthRequest, res: Response) => {
+    try {
+        const bookId = parsePositiveInt(req.params.id);
+        if (!bookId) {
+            return res.status(400).json({ error: 'Book ID không hợp lệ' });
+        }
+
+        const force = req.query.force === '1' || req.body?.force === true;
+        const result = await reanalyzeBookTtsHints(prisma, bookId, req.user.id, { force });
+        return res.json(result);
+    } catch (error: any) {
+        if (error.message === 'Book not found') {
+            return res.status(404).json({ error: 'Book not found' });
+        }
+        return res.status(500).json({ error: error.message });
     }
 });
 

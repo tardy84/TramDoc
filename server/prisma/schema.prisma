@@ -63,7 +63,8 @@ model TextSegment {
   content     String
   startTime   Float?    // Start time in audio file (if consolidated)
   endTime     Float?    // End time in audio file
-  role        String    // 'narrator', 'male', 'female', 'child'
+  role        String    // 'narrator', 'heading', 'male', 'female', 'child'
+  ttsHints    String?   // JSON: tone/pace/pitch/pause/confidence/source/version
   chapterId   Int
   chapter     Chapter   @relation(fields: [chapterId], references: [id], onDelete: Cascade)
   orderIndex  Int       @default(0)

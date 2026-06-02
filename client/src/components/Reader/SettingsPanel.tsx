@@ -81,6 +81,9 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
                                 <span className="flex flex-col items-start leading-tight">
                                     <span>{v.name}</span>
                                     <span className="text-[8px] opacity-60">{v.provider}</span>
+                                    {'description' in v && v.description ? (
+                                        <span className="text-[8px] opacity-60 text-left mt-0.5">{v.description}</span>
+                                    ) : null}
                                 </span>
                                 <span className="text-lg">{v.icon}</span>
                             </button>

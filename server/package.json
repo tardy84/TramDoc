@@ -12,7 +12,10 @@
     "test": "npm run typecheck && npm run prisma:validate",
     "dev": "tsx watch index.ts",
     "smoke:api": "node scripts/smoke-api.mjs",
-    "smoke:epub": "DATABASE_URL=${DATABASE_URL:-file:./prisma/dev.db} tsx scripts/smoke-epub-parser.ts"
+    "smoke:epub": "DATABASE_URL=${DATABASE_URL:-file:./prisma/dev.db} tsx scripts/smoke-epub-parser.ts",
+    "smoke:epub-prosody": "tsx scripts/smoke-epub-prosody.ts",
+    "smoke:tts-book-job": "tsx scripts/smoke-tts-book-job.ts",
+    "smoke:minimax": "tsx scripts/smoke-minimax-voices.ts"
   },
   "keywords": [],
   "author": "",

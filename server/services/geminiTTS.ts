@@ -17,7 +17,8 @@ export class GeminiTTSService {
     async synthesize(
         text: string,
         role: 'narrator' | 'male' | 'female',
-        voiceOverride?: string
+        voiceOverride?: string,
+        _options?: { bitrate?: number }
     ): Promise<Buffer> {
         let voiceName = 'Puck';
         

@@ -1,10 +1,12 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { Chapter } from './types';
 import { generateTTS } from '../../services/apiService';
-import { resolveApiUrl } from '../../constants';
+import { deleteOfflineAudioSegment, getOfflineAudio } from '../../services/offlineManager';
+import { getStoredOfflineTtsQuality, isOfflineTtsQuality, OFFLINE_TTS_QUALITIES, OfflineTtsQuality, resolveApiUrl } from '../../constants';
 import { getErrorMessage, isAbortError } from '../../utils/errors';
 
 const AUDIO_PRELOAD_WINDOW = 3;
+const USER_GESTURE_PRIMER_SRC = 'data:audio/wav;base64,UklGRsQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
 
 interface UseReaderAudioProps {
     bookId: number;
@@ -38,16 +40,159 @@ export const useReaderAudio = ({
     const [audioFiles, setAudioFiles] = useState<string[]>([]);
     const [audioError, setAudioError] = useState<string | null>(null);
     const [browserTTSMode, setBrowserTTSMode] = useState(false);
+    const [hasAudioSession, setHasAudioSession] = useState(false);
 
     const audioRef = useRef<HTMLAudioElement | null>(null);
+    const primedAudioRef = useRef<HTMLAudioElement | null>(null);
     const preloadAudioMapRef = useRef<Map<number, HTMLAudioElement>>(new Map());
     const preloadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const abortControllerRef = useRef<AbortController | null>(null);
     const activeChapterIdRef = useRef<number | null>(null);
     const queuedIndicesRef = useRef<Set<number>>(new Set());
     const playIdRef = useRef<number>(0);
+    const offlineObjectUrlsRef = useRef<Set<string>>(new Set());
+    const offlinePlaybackQualityRef = useRef<OfflineTtsQuality | null>(null);
+    const badOfflineAudioKeysRef = useRef<Set<string>>(new Set());
+    const pausedAudioRef = useRef<{
+        audio: HTMLAudioElement;
+        chapterId: number;
+        segmentIndex: number;
+        currentTime: number;
+    } | null>(null);
     // Map of segment index -> URL for current chapter
     const activeUrlMapRef = useRef<Map<number, string>>(new Map());
+
+    const revokeOfflineObjectUrl = useCallback((url?: string) => {
+        if (!url || !offlineObjectUrlsRef.current.has(url)) return;
+        URL.revokeObjectURL(url);
+        offlineObjectUrlsRef.current.delete(url);
+    }, []);
+
+    const primeAudioForUserGesture = useCallback(() => {
+        const audio = new Audio(USER_GESTURE_PRIMER_SRC);
+        audio.muted = true;
+        audio.volume = 0;
+        audio.preload = 'auto';
+        audio.setAttribute('playsinline', 'true');
+        primedAudioRef.current = audio;
+        audio.play().catch(() => {
+            // Some browser automation does not grant a real user gesture. The normal
+            // play path still works for real taps, and will show a clear error if not.
+        });
+    }, []);
+
+    const consumePrimedAudio = useCallback(() => {
+        const audio = primedAudioRef.current;
+        primedAudioRef.current = null;
+        if (!audio) return null;
+        audio.pause();
+        audio.muted = false;
+        audio.volume = 1;
+        return audio;
+    }, []);
+
+    const createOfflineAudio = useCallback((blob: Blob, reusableAudio?: HTMLAudioElement | null) => {
+        const playableBlob = blob.type.toLowerCase().startsWith('audio/')
+            ? blob
+            : new Blob([blob], { type: 'audio/mpeg' });
+        const url = URL.createObjectURL(playableBlob);
+        offlineObjectUrlsRef.current.add(url);
+        const audio = reusableAudio || new Audio();
+        audio.src = url;
+        audio.muted = false;
+        audio.volume = 1;
+        audio.playbackRate = playbackSpeed;
+        audio.preload = 'auto';
+        audio.setAttribute('playsinline', 'true');
+        return audio;
+    }, [playbackSpeed]);
+
+    const getOfflineQualityCandidates = useCallback(() => {
+        const storedQuality = getStoredOfflineTtsQuality();
+        const candidates = [
+            offlinePlaybackQualityRef.current,
+            storedQuality,
+            ...OFFLINE_TTS_QUALITIES.map(item => item.id),
+        ].filter((quality): quality is OfflineTtsQuality => Boolean(quality));
+        return Array.from(new Set(candidates));
+    }, []);
+
+    const buildOfflineAudioKey = useCallback((
+        chapterId: number,
+        voice: string,
+        quality: OfflineTtsQuality,
+        segmentIndex: number
+    ) => `${bookId}_${chapterId}_${voice}_${quality}_${segmentIndex}`, [bookId]);
+
+    const markBadOfflineAudio = useCallback((audio: HTMLAudioElement) => {
+        const key = audio.dataset.offlineKey;
+        if (!key) return false;
+        badOfflineAudioKeysRef.current.add(key);
+        return true;
+    }, []);
+
+    const normalizeAudioFilesForStart = useCallback((
+        urls: string[],
+        startIndex: number,
+        totalSegments: number
+    ) => {
+        if (urls.length >= totalSegments || urls[startIndex]) {
+            return urls;
+        }
+
+        const normalized = Array.from({ length: totalSegments }, () => '');
+        urls.forEach((url, index) => {
+            const targetIndex = startIndex + index;
+            if (targetIndex < totalSegments) {
+                normalized[targetIndex] = url;
+            }
+        });
+        return normalized;
+    }, []);
+
+    const findPlayableUrlIndex = useCallback((urls: string[], startIndex: number) => {
+        if (urls[startIndex]) return startIndex;
+        const nextIndex = urls.findIndex((url, index) => index >= startIndex && Boolean(url));
+        return nextIndex >= 0 ? nextIndex : startIndex;
+    }, []);
+
+    const hasPlayableAudioUrl = useCallback((urls?: string[]) => Boolean(urls?.some(Boolean)), []);
+
+    const clearPreloadedAudio = useCallback(() => {
+        preloadAudioMapRef.current.forEach(audio => {
+            audio.pause();
+            revokeOfflineObjectUrl(audio.src);
+            audio.removeAttribute('src');
+            audio.load();
+            audio.remove();
+        });
+        preloadAudioMapRef.current.clear();
+    }, [revokeOfflineObjectUrl]);
+
+    useEffect(() => {
+        document.querySelectorAll('audio[data-offline-key]').forEach(audio => {
+            const media = audio as HTMLAudioElement;
+            media.pause();
+            media.removeAttribute('src');
+            media.load();
+            media.remove();
+        });
+    }, []);
+
+    useEffect(() => {
+        const objectUrls = offlineObjectUrlsRef.current;
+        return () => {
+            clearPreloadedAudio();
+            if (primedAudioRef.current) {
+                primedAudioRef.current.pause();
+                primedAudioRef.current.removeAttribute('src');
+                primedAudioRef.current.load();
+                primedAudioRef.current = null;
+            }
+            objectUrls.forEach(url => URL.revokeObjectURL(url));
+            objectUrls.clear();
+        };
+    }, [clearPreloadedAudio]);
 
     const stopAudioPlayback = useCallback((message: string, error?: unknown) => {
         if (error) {
@@ -58,6 +203,8 @@ export const useReaderAudio = ({
         setAudioError(message.replace(/^\[[^\]]+\]\s*/, ''));
         setBrowserTTSMode(false);
         setIsPlaying(false);
+        setHasAudioSession(false);
+        pausedAudioRef.current = null;
     }, []);
 
     const isSpeakableSegment = useCallback((index: number) => {
@@ -67,6 +214,15 @@ export const useReaderAudio = ({
             .replace(/[*＊✱✲✳✴✻✼✽·•●○◆◇■□_—–~….-]+/g, '');
         return /[\p{L}\p{N}]/u.test(normalized);
     }, [chapters, currentChapterIndex]);
+
+    const findNextSpeakableSegmentIndex = useCallback((startIndex: number) => {
+        const chapter = chapters[currentChapterIndex];
+        if (!chapter) return null;
+        for (let index = startIndex; index < chapter.segments.length; index++) {
+            if (isSpeakableSegment(index)) return index;
+        }
+        return null;
+    }, [chapters, currentChapterIndex, isSpeakableSegment]);
 
     const playBrowserTTS = useCallback((index: number) => {
         const chapter = chapters[currentChapterIndex];
@@ -88,7 +244,14 @@ export const useReaderAudio = ({
         const currentGlobal = getGlobalAudio();
         if (currentGlobal) {
             currentGlobal.pause();
-            currentGlobal.src = '';
+            revokeOfflineObjectUrl(currentGlobal.src);
+            if (currentGlobal.dataset.offlineKey) {
+                currentGlobal.removeAttribute('src');
+                currentGlobal.load();
+                currentGlobal.remove();
+            } else {
+                currentGlobal.src = '';
+            }
             setGlobalAudio(null);
         }
 
@@ -100,6 +263,7 @@ export const useReaderAudio = ({
 
         utterance.onstart = () => {
             setIsPlaying(true);
+            setHasAudioSession(true);
             setCurrentSegmentIndex(index);
         };
 
@@ -114,7 +278,7 @@ export const useReaderAudio = ({
 
         queuedIndicesRef.current.add(index);
         window.speechSynthesis.speak(utterance);
-    }, [chapters, currentChapterIndex, playbackSpeed, nextChapter, setCurrentSegmentIndex, getGlobalAudio, setGlobalAudio, isSpeakableSegment]);
+    }, [chapters, currentChapterIndex, playbackSpeed, nextChapter, setCurrentSegmentIndex, getGlobalAudio, setGlobalAudio, isSpeakableSegment, revokeOfflineObjectUrl]);
 
     const playAudio = useCallback(async (index: number, _files: string[] = audioFiles, retryCount = 0, incomingPlayId?: number) => {
         const chapterIdx = currentChapterIndex;
@@ -134,6 +298,20 @@ export const useReaderAudio = ({
                 return preloaded;
             }
 
+            for (const quality of getOfflineQualityCandidates()) {
+                const offlineKey = buildOfflineAudioKey(chapterId, selectedVoice, quality, idx);
+                if (badOfflineAudioKeysRef.current.has(offlineKey)) continue;
+                const offlineBlob = await getOfflineAudio(bookId, chapterId, selectedVoice, idx, quality);
+                if (offlineBlob) {
+                    offlinePlaybackQualityRef.current = quality;
+                    const audio = createOfflineAudio(offlineBlob, consumePrimedAudio());
+                    audio.dataset.offlineKey = offlineKey;
+                    audio.dataset.offlineQuality = quality;
+                    audio.dataset.offlineSegmentIndex = String(idx);
+                    return audio;
+                }
+            }
+
             // Check URL map
             let url = activeUrlMapRef.current.get(idx);
 
@@ -142,9 +320,13 @@ export const useReaderAudio = ({
             }
 
             if (!url) return null;
-            const audio = new Audio(resolveApiUrl(url));
+            const audio = consumePrimedAudio() || new Audio();
+            audio.src = resolveApiUrl(url);
+            audio.muted = false;
+            audio.volume = 1;
             audio.playbackRate = playbackSpeed;
             audio.preload = 'auto';
+            audio.setAttribute('playsinline', 'true');
             return audio;
         };
 
@@ -158,6 +340,25 @@ export const useReaderAudio = ({
                     continue;
                 }
 
+                for (const quality of getOfflineQualityCandidates()) {
+                    const offlineKey = buildOfflineAudioKey(chapterId, selectedVoice, quality, idx);
+                    if (badOfflineAudioKeysRef.current.has(offlineKey)) continue;
+                    const offlineBlob = await getOfflineAudio(bookId, chapterId, selectedVoice, idx, quality);
+                    if (offlineBlob) {
+                        offlinePlaybackQualityRef.current = quality;
+                        const audio = createOfflineAudio(offlineBlob);
+                        audio.dataset.offlineKey = offlineKey;
+                        audio.dataset.offlineQuality = quality;
+                        audio.dataset.offlineSegmentIndex = String(idx);
+                        audio.load();
+                        preloadAudioMapRef.current.set(idx, audio);
+                        queued++;
+                        break;
+                    }
+                }
+                if (preloadAudioMapRef.current.has(idx)) {
+                    continue;
+                }
                 // Aggressive pre-fetch: Force the browser to start downloading the file into cache
                 // BEFORE creating the audio element wait. This circumvents slow audio tag initialization.
                 const url = activeUrlMapRef.current.get(idx) || (_files ? _files[idx] : null);
@@ -176,7 +377,84 @@ export const useReaderAudio = ({
             // Keep the queue centered near the active reading position.
             for (const preloadIndex of preloadAudioMapRef.current.keys()) {
                 if (preloadIndex < index || preloadIndex >= startIdx + AUDIO_PRELOAD_WINDOW + 3) {
+                    const preloadedAudio = preloadAudioMapRef.current.get(preloadIndex);
+                    if (preloadedAudio) {
+                        preloadedAudio.pause();
+                        revokeOfflineObjectUrl(preloadedAudio.src);
+                        preloadedAudio.removeAttribute('src');
+                        preloadedAudio.load();
+                        preloadedAudio.remove();
+                    }
                     preloadAudioMapRef.current.delete(preloadIndex);
+                }
+            }
+        };
+
+        const fallbackToServerAudio = async (reuseAudio?: HTMLAudioElement) => {
+            clearPreloadedAudio();
+            const offlineObjectUrl = reuseAudio?.dataset.offlineKey ? reuseAudio.src : undefined;
+
+            if (!navigator.onLine) {
+                if (offlineObjectUrl) revokeOfflineObjectUrl(offlineObjectUrl);
+                stopAudioPlayback('[TTS] Đoạn này chưa được tải offline.');
+                return;
+            }
+
+            try {
+                setGenerating(true);
+                const { audioFiles: urls } = await generateTTS(bookId, chapterId, selectedVoice, index, undefined, abortControllerRef.current?.signal);
+                if (currentPlayId !== playIdRef.current || activeChapterIdRef.current !== chapterId) {
+                    if (offlineObjectUrl) revokeOfflineObjectUrl(offlineObjectUrl);
+                    return;
+                }
+
+                const normalizedUrls = normalizeAudioFilesForStart(urls, index, chapter.segments.length);
+                if (!hasPlayableAudioUrl(normalizedUrls)) {
+                    stopAudioPlayback('[TTS] Không tạo được URL audio cho chương này.');
+                    return;
+                }
+                const playbackIndex = findPlayableUrlIndex(normalizedUrls, index);
+                activeUrlMapRef.current.clear();
+                offlinePlaybackQualityRef.current = null;
+                normalizedUrls.forEach((url, i) => {
+                    activeUrlMapRef.current.set(i, url);
+                });
+                setAudioFiles(normalizedUrls);
+                setChapters(prev => prev.map((c, idx) => idx === currentChapterIndex ? { ...c, audioFiles: normalizedUrls } : c));
+
+                const serverUrl = normalizedUrls[playbackIndex];
+                if (reuseAudio && playbackIndex === index && serverUrl) {
+                    if (offlineObjectUrl) revokeOfflineObjectUrl(offlineObjectUrl);
+                    delete reuseAudio.dataset.offlineKey;
+                    delete reuseAudio.dataset.offlineQuality;
+                    delete reuseAudio.dataset.offlineSegmentIndex;
+                    reuseAudio.pause();
+                    reuseAudio.src = resolveApiUrl(serverUrl);
+                    reuseAudio.playbackRate = playbackSpeed;
+                    reuseAudio.preload = 'auto';
+                    reuseAudio.load();
+                    setGlobalAudio(reuseAudio);
+                    audioRef.current = reuseAudio;
+                    setHasAudioSession(true);
+                    setIsPlaying(true);
+                    preloadUpcoming(index + 1);
+                    reuseAudio.play().catch(error => {
+                        if (error.name === 'AbortError') return;
+                        if (currentPlayId !== playIdRef.current) return;
+                        stopAudioPlayback('[Audio] Trình duyệt chặn tự phát sau khi xoá audio offline lỗi. Bấm phát lại để nghe tiếp.', error);
+                    });
+                    return;
+                }
+
+                if (offlineObjectUrl) revokeOfflineObjectUrl(offlineObjectUrl);
+                playAudio(playbackIndex, normalizedUrls, 0, currentPlayId);
+            } catch (error) {
+                if (currentPlayId !== playIdRef.current) return;
+                if (offlineObjectUrl) revokeOfflineObjectUrl(offlineObjectUrl);
+                stopAudioPlayback(`[TTS] Không tạo được audio server sau khi audio offline lỗi. ${getErrorMessage(error, 'Vui lòng thử lại sau.')}`, error);
+            } finally {
+                if (activeChapterIdRef.current === chapterId) {
+                    setGenerating(false);
                 }
             }
         };
@@ -197,6 +475,12 @@ export const useReaderAudio = ({
             currentGlobal.pause();
             currentGlobal.onended = null;
             currentGlobal.onerror = null;
+            revokeOfflineObjectUrl(currentGlobal.src);
+            if (currentGlobal.dataset.offlineKey) {
+                currentGlobal.removeAttribute('src');
+                currentGlobal.load();
+                currentGlobal.remove();
+            }
             if (!isSequentialNext) currentGlobal.src = '';
             setGlobalAudio(null);
         }
@@ -219,6 +503,7 @@ export const useReaderAudio = ({
                     nextChapter();
                 } else {
                     setIsPlaying(false);
+                    setHasAudioSession(false);
                 }
                 return;
             }
@@ -237,9 +522,43 @@ export const useReaderAudio = ({
 
         setGlobalAudio(audio);
         audioRef.current = audio;
+        pausedAudioRef.current = null;
+        setHasAudioSession(true);
+
+        let offlineStartTimeout: ReturnType<typeof setTimeout> | null = null;
+        const clearOfflineStartTimeout = () => {
+            if (!offlineStartTimeout) return;
+            clearTimeout(offlineStartTimeout);
+            offlineStartTimeout = null;
+        };
+        const fallbackFromBadOfflineAudio = (reason = 'offline audio did not start') => {
+            const badOfflineAudio = markBadOfflineAudio(audio);
+            if (!badOfflineAudio) return false;
+            if (badOfflineAudio) {
+                const failedQuality = audio.dataset.offlineQuality;
+                const failedSegmentIndex = Number(audio.dataset.offlineSegmentIndex);
+                if (failedQuality && isOfflineTtsQuality(failedQuality) && Number.isInteger(failedSegmentIndex)) {
+                    deleteOfflineAudioSegment(bookId, chapterId, selectedVoice, failedSegmentIndex, failedQuality)
+                        .catch(error => console.error('[Offline audio] Failed to delete bad cached segment:', error));
+                }
+                console.warn('[Offline audio] Skipping cached segment and falling back to server', {
+                    key: audio.dataset.offlineKey,
+                    reason,
+                    currentTime: audio.currentTime,
+                    readyState: audio.readyState,
+                    networkState: audio.networkState,
+                    errorCode: audio.error?.code,
+                });
+                setAudioError('Audio offline trên máy bị lỗi, đang xoá đoạn hỏng và phát từ server...');
+            }
+            clearOfflineStartTimeout();
+            fallbackToServerAudio(audio);
+            return true;
+        };
 
         audio.onerror = () => {
             if (currentPlayId !== playIdRef.current) return;
+            if (fallbackFromBadOfflineAudio(`media error ${audio.error?.code || 'unknown'}`)) return;
             if (!isSpeakableSegment(index)) {
                 if (index + 1 < chapter.segments.length) {
                     setCurrentSegmentIndex(index + 1);
@@ -248,6 +567,7 @@ export const useReaderAudio = ({
                     nextChapter();
                 } else {
                     setIsPlaying(false);
+                    setHasAudioSession(false);
                 }
                 return;
             }
@@ -265,6 +585,13 @@ export const useReaderAudio = ({
 
         audio.onended = () => {
             if (activeChapterIdRef.current !== chapterId) return;
+            clearOfflineStartTimeout();
+            revokeOfflineObjectUrl(audio.src);
+            if (audio.dataset.offlineKey) {
+                audio.removeAttribute('src');
+                audio.load();
+                audio.remove();
+            }
             if (index + 1 < chapter.segments.length) {
                 // GAPLESS HACK: If we have preloaded the next segment, play it synchronously
                 // here inside the ending frame of the last audio, completely avoiding
@@ -280,15 +607,46 @@ export const useReaderAudio = ({
                     nextChapter();
                 } else {
                     setIsPlaying(false);
+                    setHasAudioSession(false);
                 }
             } else {
                 setIsPlaying(false);
+                setHasAudioSession(false);
             }
         };
+
+        audio.onplaying = () => {
+            clearOfflineStartTimeout();
+        };
+        if (audio.dataset.offlineKey) {
+            audio.ontimeupdate = () => {
+                if (audio.currentTime > 0.1) {
+                    clearOfflineStartTimeout();
+                }
+            };
+            offlineStartTimeout = setTimeout(() => {
+                if (
+                    currentPlayId !== playIdRef.current ||
+                    activeChapterIdRef.current !== chapterId ||
+                    !audio.dataset.offlineKey ||
+                    audio.ended
+                ) return;
+
+                if (audio.paused || audio.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || audio.currentTime <= 0.1) {
+                    fallbackFromBadOfflineAudio('offline audio made no audible progress');
+                }
+            }, 3000);
+        }
 
         audio.play().catch(error => {
             if (error.name === 'AbortError') return;
             if (currentPlayId !== playIdRef.current) return;
+            if (error.name === 'NotAllowedError') {
+                clearOfflineStartTimeout();
+                stopAudioPlayback('[Audio] Trình duyệt chặn tự phát. Bấm phát lại để nghe tiếp.', error);
+                return;
+            }
+            if (fallbackFromBadOfflineAudio(error?.message || 'play rejected')) return;
             if (retryCount < 3) {
                 setTimeout(() => {
                     if (currentPlayId === playIdRef.current) {
@@ -307,12 +665,57 @@ export const useReaderAudio = ({
             preloadUpcoming(index + 1);
         }
 
-    }, [audioFiles, chapters, currentChapterIndex, nextChapter, playbackSpeed, stopAudioPlayback, setCurrentSegmentIndex, getGlobalAudio, setGlobalAudio, isSpeakableSegment]);
+    }, [audioFiles, bookId, buildOfflineAudioKey, chapters, clearPreloadedAudio, consumePrimedAudio, currentChapterIndex, createOfflineAudio, findPlayableUrlIndex, hasPlayableAudioUrl, nextChapter, normalizeAudioFilesForStart, playbackSpeed, selectedVoice, setChapters, stopAudioPlayback, setCurrentSegmentIndex, getGlobalAudio, setGlobalAudio, isSpeakableSegment, revokeOfflineObjectUrl, getOfflineQualityCandidates, markBadOfflineAudio]);
+
+    const resumePausedAudio = useCallback((chapterId: number) => {
+        const paused = pausedAudioRef.current;
+        if (!paused || paused.chapterId !== chapterId || paused.audio.ended || !paused.audio.src) {
+            return false;
+        }
+
+        const audio = paused.audio;
+        audio.playbackRate = playbackSpeed;
+        if (Number.isFinite(paused.currentTime) && paused.currentTime > 0) {
+            audio.currentTime = paused.currentTime;
+        }
+        audioRef.current = audio;
+        setGlobalAudio(audio);
+        setHasAudioSession(true);
+        audio.play()
+            .then(() => {
+                setCurrentSegmentIndex(paused.segmentIndex);
+                setIsPlaying(true);
+            })
+            .catch(error => {
+                stopAudioPlayback('[Audio] Trình duyệt chặn tự phát. Bấm phát lại để nghe tiếp.', error);
+            });
+        return true;
+    }, [playbackSpeed, setCurrentSegmentIndex, setGlobalAudio, stopAudioPlayback]);
+
+    const findOfflineAudioIndex = useCallback(async (
+        chapterId: number,
+        startIndex: number
+    ) => {
+        const chapter = chapters[currentChapterIndex];
+        if (!chapter) return null;
+        const qualities = getOfflineQualityCandidates();
+
+        if (!isSpeakableSegment(startIndex)) return null;
+        for (const quality of qualities) {
+            const offlineKey = buildOfflineAudioKey(chapterId, selectedVoice, quality, startIndex);
+            if (badOfflineAudioKeysRef.current.has(offlineKey)) continue;
+            const blob = await getOfflineAudio(bookId, chapterId, selectedVoice, startIndex, quality);
+            if (blob) return { index: startIndex, quality };
+        }
+        return null;
+    }, [bookId, buildOfflineAudioKey, chapters, currentChapterIndex, isSpeakableSegment, selectedVoice, getOfflineQualityCandidates]);
 
     const generateAudio = useCallback(async (startFromIndex?: number) => {
         if (chapters.length === 0) return;
 
         const chapter = chapters[currentChapterIndex];
+        if (typeof startFromIndex !== 'number' && resumePausedAudio(chapter.id)) return;
+
         activeChapterIdRef.current = chapter.id;
         ++playIdRef.current; // Cancel stale playback retries while a new voice/segment is being prepared.
 
@@ -322,37 +725,79 @@ export const useReaderAudio = ({
 
         window.speechSynthesis.cancel();
         queuedIndicesRef.current.clear();
-        preloadAudioMapRef.current.clear();
+        clearPreloadedAudio();
 
         const currentGlobal = getGlobalAudio();
-        if (currentGlobal) {
-            currentGlobal.pause();
-            currentGlobal.src = '';
-            setGlobalAudio(null);
-        }
+            if (currentGlobal) {
+                currentGlobal.pause();
+                revokeOfflineObjectUrl(currentGlobal.src);
+                if (currentGlobal.dataset.offlineKey) {
+                    currentGlobal.removeAttribute('src');
+                    currentGlobal.load();
+                    currentGlobal.remove();
+                }
+                currentGlobal.src = '';
+                setGlobalAudio(null);
+            }
+        pausedAudioRef.current = null;
+        setHasAudioSession(false);
 
         setGenerating(true);
         setAudioError(null);
         setBrowserTTSMode(false);
+        primeAudioForUserGesture();
 
         try {
-            const targetIndex = typeof startFromIndex === 'number' ? startFromIndex : currentSegmentIndex;
+            const requestedIndex = typeof startFromIndex === 'number' ? startFromIndex : currentSegmentIndex;
+            const targetIndex = findNextSpeakableSegmentIndex(requestedIndex);
+            if (targetIndex === null) {
+                if (currentChapterIndex < chapters.length - 1) {
+                    nextChapter();
+                } else {
+                    setIsPlaying(false);
+                    setHasAudioSession(false);
+                }
+                return;
+            }
+            const offlineStart = await findOfflineAudioIndex(chapter.id, targetIndex);
+            if (offlineStart !== null) {
+                if (controller.signal.aborted || activeChapterIdRef.current !== chapter.id) return;
+                offlinePlaybackQualityRef.current = offlineStart.quality;
+                activeUrlMapRef.current.clear();
+                setAudioFiles([]);
+                setChapters(prev => prev.map((c, idx) => idx === currentChapterIndex ? { ...c, audioFiles: [] } : c));
+                playAudio(offlineStart.index, []);
+                return;
+            }
+
+            if (!navigator.onLine) {
+                stopAudioPlayback('[TTS] Đoạn này chưa được tải offline.');
+                return;
+            }
+
             // Ask the server for signed, short-lived audio URLs. This avoids exposing
             // the long-lived login JWT in media URLs while still enabling <audio> playback.
-            const { audioFiles: urls } = await generateTTS(bookId, chapter.id, selectedVoice, targetIndex);
+            const { audioFiles: urls } = await generateTTS(bookId, chapter.id, selectedVoice, targetIndex, undefined, controller.signal);
 
             if (controller.signal.aborted || activeChapterIdRef.current !== chapter.id) return;
 
+            const normalizedUrls = normalizeAudioFilesForStart(urls, targetIndex, chapter.segments.length);
+            if (!hasPlayableAudioUrl(normalizedUrls)) {
+                stopAudioPlayback('[TTS] Không tạo được URL audio cho chương này.');
+                return;
+            }
+            const playbackIndex = findPlayableUrlIndex(normalizedUrls, targetIndex);
             activeUrlMapRef.current.clear();
-            urls.forEach((url, i) => {
+            offlinePlaybackQualityRef.current = null;
+            normalizedUrls.forEach((url, i) => {
                 activeUrlMapRef.current.set(i, url);
             });
 
-            setAudioFiles(urls);
-            setChapters(prev => prev.map((c, idx) => idx === currentChapterIndex ? { ...c, audioFiles: urls } : c));
+            setAudioFiles(normalizedUrls);
+            setChapters(prev => prev.map((c, idx) => idx === currentChapterIndex ? { ...c, audioFiles: normalizedUrls } : c));
 
             // Start playing immediately from target
-            playAudio(targetIndex, urls);
+            playAudio(playbackIndex, normalizedUrls);
 
         } catch (error) {
             if (isAbortError(error) || controller.signal.aborted) return;
@@ -365,57 +810,131 @@ export const useReaderAudio = ({
                 abortControllerRef.current = null;
             }
         }
-    }, [bookId, chapters, currentChapterIndex, currentSegmentIndex, playAudio, setChapters, selectedVoice, getGlobalAudio, setGlobalAudio, stopAudioPlayback]);
+    }, [bookId, chapters, currentChapterIndex, currentSegmentIndex, playAudio, setChapters, selectedVoice, getGlobalAudio, setGlobalAudio, stopAudioPlayback, clearPreloadedAudio, revokeOfflineObjectUrl, resumePausedAudio, findOfflineAudioIndex, findNextSpeakableSegmentIndex, findPlayableUrlIndex, nextChapter, normalizeAudioFilesForStart, primeAudioForUserGesture, hasPlayableAudioUrl]);
+
+    const playSegment = useCallback(async (startIndex: number) => {
+        const chapter = chapters[currentChapterIndex];
+        if (!chapter) return;
+
+        const targetIndex = findNextSpeakableSegmentIndex(startIndex);
+        if (targetIndex === null) {
+            if (currentChapterIndex < chapters.length - 1) {
+                nextChapter();
+            } else {
+                setIsPlaying(false);
+                setHasAudioSession(false);
+            }
+            return;
+        }
+
+        const clickPlayId = ++playIdRef.current;
+        activeChapterIdRef.current = chapter.id;
+        if (abortControllerRef.current) {
+            abortControllerRef.current.abort();
+            abortControllerRef.current = null;
+        }
+        setGenerating(false);
+        setAudioError(null);
+        setBrowserTTSMode(false);
+        primeAudioForUserGesture();
+
+        const offlineStart = await findOfflineAudioIndex(chapter.id, targetIndex);
+        if (clickPlayId !== playIdRef.current || activeChapterIdRef.current !== chapter.id) return;
+
+        if (offlineStart !== null) {
+            offlinePlaybackQualityRef.current = offlineStart.quality;
+            activeUrlMapRef.current.clear();
+            setAudioFiles([]);
+            setChapters(prev => prev.map((c, idx) => idx === currentChapterIndex ? { ...c, audioFiles: [] } : c));
+            playAudio(offlineStart.index, [], 0, clickPlayId);
+            return;
+        }
+
+        let playbackIndex = targetIndex;
+        let hasCachedUrl = Boolean(activeUrlMapRef.current.get(playbackIndex) || audioFiles[playbackIndex]);
+        if (!hasCachedUrl) {
+            playbackIndex = findPlayableUrlIndex(audioFiles, targetIndex);
+            hasCachedUrl = Boolean(activeUrlMapRef.current.get(playbackIndex) || audioFiles[playbackIndex]);
+        }
+
+        if (hasCachedUrl) {
+            playAudio(playbackIndex, audioFiles, 0, clickPlayId);
+            return;
+        }
+
+        generateAudio(targetIndex);
+    }, [audioFiles, chapters, currentChapterIndex, findNextSpeakableSegmentIndex, findOfflineAudioIndex, findPlayableUrlIndex, generateAudio, nextChapter, playAudio, primeAudioForUserGesture, setChapters]);
 
     const togglePlayPause = useCallback(() => {
         if (browserTTSMode) {
             if (isPlaying) {
                 window.speechSynthesis.pause();
                 setIsPlaying(false);
+                setHasAudioSession(true);
             } else {
                 window.speechSynthesis.resume();
+                setHasAudioSession(true);
                 setIsPlaying(true);
             }
             return;
         }
 
         if (isPlaying) {
-            // Increment playId to cancel any pending onended chain
-            ++playIdRef.current;
-            // Pause all possible audio sources
             const globalAudio = getGlobalAudio();
-            if (globalAudio) globalAudio.pause();
-            if (audioRef.current && audioRef.current !== globalAudio) audioRef.current.pause();
+            const activeAudio = globalAudio || audioRef.current;
+            if (activeAudio && activeAudio.src && !activeAudio.ended) {
+                pausedAudioRef.current = {
+                    audio: activeAudio,
+                    chapterId: activeChapterIdRef.current ?? chapters[currentChapterIndex]?.id ?? 0,
+                    segmentIndex: currentSegmentIndex,
+                    currentTime: activeAudio.currentTime
+                };
+                activeAudio.pause();
+                audioRef.current = activeAudio;
+                setGlobalAudio(activeAudio);
+                setHasAudioSession(true);
+            } else {
+                ++playIdRef.current;
+                setHasAudioSession(false);
+                pausedAudioRef.current = null;
+            }
+            if (audioRef.current && audioRef.current !== activeAudio) audioRef.current.pause();
             setIsPlaying(false);
         } else {
-            const audio = audioRef.current;
+            const chapter = chapters[currentChapterIndex];
+            if (chapter && resumePausedAudio(chapter.id)) return;
+
+            const audio = getGlobalAudio() || audioRef.current;
             if (audio && audio.src && !audio.ended) {
-                audio.play().catch(console.error);
-                setIsPlaying(true);
+                audio.playbackRate = playbackSpeed;
+                audioRef.current = audio;
+                setGlobalAudio(audio);
+                setHasAudioSession(true);
+                audio.play()
+                    .then(() => setIsPlaying(true))
+                    .catch(error => {
+                        stopAudioPlayback('[Audio] Trình duyệt chặn tự phát. Bấm phát lại để nghe tiếp.', error);
+                    });
             } else {
                 generateAudio();
             }
         }
-    }, [browserTTSMode, isPlaying, generateAudio, getGlobalAudio]);
+    }, [browserTTSMode, chapters, currentChapterIndex, currentSegmentIndex, isPlaying, generateAudio, getGlobalAudio, playbackSpeed, resumePausedAudio, setGlobalAudio, stopAudioPlayback]);
 
     const nextSegment = useCallback(() => {
         const currentChapter = chapters[currentChapterIndex];
         if (currentChapter && currentSegmentIndex < currentChapter.segments.length - 1) {
-            const nextIdx = currentSegmentIndex + 1;
-            if (activeUrlMapRef.current.has(nextIdx)) playAudio(nextIdx, audioFiles);
-            else generateAudio(nextIdx);
+            playSegment(currentSegmentIndex + 1);
         } else {
             nextChapter();
         }
-    }, [chapters, currentChapterIndex, currentSegmentIndex, audioFiles, playAudio, generateAudio, nextChapter]);
+    }, [chapters, currentChapterIndex, currentSegmentIndex, playSegment, nextChapter]);
 
     const prevSegment = useCallback(() => {
         if (currentSegmentIndex > 0) {
-            const nextIdx = currentSegmentIndex - 1;
-            if (activeUrlMapRef.current.has(nextIdx)) playAudio(nextIdx, audioFiles);
-            else generateAudio(nextIdx);
+            playSegment(currentSegmentIndex - 1);
         }
-    }, [currentSegmentIndex, audioFiles, playAudio, generateAudio]);
+    }, [currentSegmentIndex, playSegment]);
 
     const prevVoiceRef = useRef(selectedVoice);
 
@@ -430,12 +949,20 @@ export const useReaderAudio = ({
             const currentGlobal = getGlobalAudio();
             if (currentGlobal) {
                 currentGlobal.pause();
+                revokeOfflineObjectUrl(currentGlobal.src);
+                if (currentGlobal.dataset.offlineKey) {
+                    currentGlobal.removeAttribute('src');
+                    currentGlobal.load();
+                    currentGlobal.remove();
+                }
                 setGlobalAudio(null);
                 audioRef.current = null;
             }
+            pausedAudioRef.current = null;
+            setHasAudioSession(false);
             activeUrlMapRef.current.clear();
             setAudioFiles([]);
-            preloadAudioMapRef.current.clear();
+            clearPreloadedAudio();
             if (isPlaying) {
                 generateAudio(currentSegmentIndex);
                 return;
@@ -443,35 +970,61 @@ export const useReaderAudio = ({
         }
 
         if (activeChapterIdRef.current !== chapter.id) {
+            const nextAudioFiles = chapter.audioFiles || [];
+            const nextSegmentIndex = currentSegmentIndex < chapter.segments.length ? currentSegmentIndex : 0;
             const currentGlobal = getGlobalAudio();
             if (currentGlobal) {
                 currentGlobal.pause();
+                revokeOfflineObjectUrl(currentGlobal.src);
+                if (currentGlobal.dataset.offlineKey) {
+                    currentGlobal.removeAttribute('src');
+                    currentGlobal.load();
+                    currentGlobal.remove();
+                }
                 setGlobalAudio(null);
                 audioRef.current = null;
             }
+            pausedAudioRef.current = null;
+            setHasAudioSession(false);
             activeChapterIdRef.current = chapter.id;
             activeUrlMapRef.current.clear();
-            preloadAudioMapRef.current.clear();
-            setAudioFiles(chapter.audioFiles || []);
+            clearPreloadedAudio();
+            setAudioFiles(nextAudioFiles);
             if (isPlaying) {
-                if (chapter.audioFiles && chapter.audioFiles.length > 0) {
-                    playAudio(currentSegmentIndex, chapter.audioFiles);
+                if (hasPlayableAudioUrl(nextAudioFiles)) {
+                    playAudio(nextSegmentIndex, nextAudioFiles);
                 } else if (!generating) {
-                    generateAudio(currentSegmentIndex);
+                    generateAudio(nextSegmentIndex);
                 }
             }
         } else if (isPlaying) {
+            const nextSegmentIndex = currentSegmentIndex < chapter.segments.length ? currentSegmentIndex : 0;
             const globalAudio = getGlobalAudio();
-            if (!globalAudio || (globalAudio.paused && !globalAudio.ended && globalAudio.src)) {
-                playAudio(currentSegmentIndex, audioFiles);
-            } else if (audioFiles.length === 0 && !generating) {
-                generateAudio(currentSegmentIndex);
+            if (globalAudio && globalAudio.paused && !globalAudio.ended && globalAudio.src) {
+                globalAudio.playbackRate = playbackSpeed;
+                globalAudio.play().catch(console.error);
+            } else if (!globalAudio && audioRef.current?.src && !audioRef.current.ended) {
+                audioRef.current.playbackRate = playbackSpeed;
+                setGlobalAudio(audioRef.current);
+                audioRef.current.play().catch(console.error);
+            } else if (
+                !globalAudio &&
+                (
+                    preloadAudioMapRef.current.has(nextSegmentIndex) ||
+                    Boolean(activeUrlMapRef.current.get(nextSegmentIndex)) ||
+                    hasPlayableAudioUrl(audioFiles)
+                )
+            ) {
+                playAudio(nextSegmentIndex, audioFiles);
+            } else if (!globalAudio && !generating) {
+                generateAudio(nextSegmentIndex);
             }
         }
-    }, [currentChapterIndex, chapters, isPlaying, currentSegmentIndex, generating, audioFiles, getGlobalAudio, setGlobalAudio, playAudio, generateAudio, selectedVoice]);
+    }, [currentChapterIndex, chapters, isPlaying, currentSegmentIndex, generating, audioFiles, getGlobalAudio, setGlobalAudio, playAudio, generateAudio, selectedVoice, clearPreloadedAudio, revokeOfflineObjectUrl, playbackSpeed, hasPlayableAudioUrl]);
 
     return {
         isPlaying,
+        hasAudioSession: hasAudioSession || browserTTSMode || hasPlayableAudioUrl(audioFiles) || Boolean(audioRef.current?.src),
         setIsPlaying,
         generating,
         audioError,
@@ -483,6 +1036,7 @@ export const useReaderAudio = ({
         generateAudio,
         nextSegment,
         prevSegment,
+        playSegment,
         playAudio,
         playBrowserTTS
     };

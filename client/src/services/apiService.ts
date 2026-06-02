@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { API_BASE_URL } from '../constants';
+import { API_BASE_URL, OfflineTtsQuality } from '../constants';
 import { Book, Bookmark } from '../types';
 
 // Centralised API base. Browser dev falls back to the Vite proxy at the current origin;
@@ -94,8 +94,90 @@ export const deleteBookmark = async (id: number): Promise<void> => {
 // --- TTS Trigger API ---
 // Note: Actual streaming is handled by signed /audio/:filename URLs in HTMLAudioElement.
 // This is to trigger the generation endpoint or cache verification.
-export const generateTTS = async (bookId: number, chapterId: number, voice: string, startSegmentIndex?: number): Promise<{ audioFiles: string[] }> => {
-    const response = await api.post(`/books/${bookId}/chapters/${chapterId}/tts`, { voice, startSegmentIndex });
+export const generateTTS = async (
+    bookId: number,
+    chapterId: number,
+    voice: string,
+    startSegmentIndex?: number,
+    quality?: OfflineTtsQuality,
+    signal?: AbortSignal
+): Promise<{ audioFiles: string[] }> => {
+    const response = await api.post(
+        `/books/${bookId}/chapters/${chapterId}/tts`,
+        { voice, startSegmentIndex, quality },
+        { signal, timeout: 60000 }
+    );
+    return response.data;
+};
+
+
+export type TtsBookJobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+
+export interface TtsBookJobProgress {
+    jobId: string;
+    userId: number;
+    bookId: number;
+    voice: string;
+    mode: 'missing' | 'force';
+    quality?: OfflineTtsQuality;
+    status: TtsBookJobStatus;
+    totalSegments: number;
+    cachedSegments: number;
+    generatedSegments: number;
+    failedSegments: number;
+    skippedSegments: number;
+    currentChapterId?: number;
+    currentChapterTitle?: string;
+    currentSegmentIndex?: number;
+    error?: string;
+    createdAt: string;
+    updatedAt: string;
+    cancelledAt?: string;
+    completedAt?: string;
+}
+
+export interface TtsBookCacheChapterStatus {
+    chapterId: number;
+    title: string;
+    total: number;
+    cached: number;
+    stale: number;
+    missing: number;
+    skipped: number;
+}
+
+export interface TtsBookCacheStatus {
+    total: number;
+    cached: number;
+    stale: number;
+    missing: number;
+    skipped: number;
+    chapters: TtsBookCacheChapterStatus[];
+}
+
+export const startBookTtsJob = async (
+    bookId: number,
+    voice: string,
+    mode: 'missing' | 'force' = 'missing',
+    confirmExpensiveProvider = false,
+    quality?: OfflineTtsQuality
+): Promise<TtsBookJobProgress> => {
+    const response = await api.post(`/books/${bookId}/tts/jobs`, { voice, mode, confirmExpensiveProvider, quality });
+    return response.data;
+};
+
+export const getBookTtsJob = async (bookId: number, jobId: string): Promise<TtsBookJobProgress> => {
+    const response = await api.get(`/books/${bookId}/tts/jobs/${jobId}`);
+    return response.data;
+};
+
+export const cancelBookTtsJob = async (bookId: number, jobId: string): Promise<TtsBookJobProgress> => {
+    const response = await api.post(`/books/${bookId}/tts/jobs/${jobId}/cancel`);
+    return response.data;
+};
+
+export const getBookTtsStatus = async (bookId: number, voice: string, quality?: OfflineTtsQuality): Promise<TtsBookCacheStatus> => {
+    const response = await api.get(`/books/${bookId}/tts/status`, { params: { voice, quality } });
     return response.data;
 };
 
@@ -110,5 +192,9 @@ export default {
     getBookmarks,
     createBookmark,
     deleteBookmark,
-    generateTTS
+    generateTTS,
+    startBookTtsJob,
+    getBookTtsJob,
+    cancelBookTtsJob,
+    getBookTtsStatus
 };
