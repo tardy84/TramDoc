@@ -7,6 +7,7 @@ import {
     getStoredOfflineTtsQuality,
     OfflineTtsQuality,
     OFFLINE_TTS_QUALITIES,
+    isExpensiveTtsVoice,
     providerSupportsOfflineBitrate,
 } from '../../constants';
 import {
@@ -69,10 +70,9 @@ export default function OfflineTtsPanel({ book, selectedVoice, setSelectedVoice 
     const [offlineUsageBytes, setOfflineUsageBytes] = useState(0);
     const cancelRequestedRef = useRef(false);
     const downloadAbortRef = useRef<AbortController | null>(null);
-    const latestJobRef = useRef<TtsBookJobProgress | null>(null);
 
     const isBusy = phase === 'generating' || phase === 'downloading';
-    const isExpensiveProvider = selectedVoice.startsWith('vbee-') || selectedVoice.startsWith('minimax-');
+    const isExpensiveProvider = isExpensiveTtsVoice(selectedVoice);
     const supportsBitrate = providerSupportsOfflineBitrate(selectedVoice);
     const effectiveQuality = supportsBitrate ? quality : DEFAULT_OFFLINE_TTS_QUALITY;
     const voiceLabel = ENABLED_TTS_VOICES.find(item => item.id === selectedVoice)?.name || selectedVoice;
@@ -145,23 +145,8 @@ export default function OfflineTtsPanel({ book, selectedVoice, setSelectedVoice 
     }, [book.id, selectedVoice, effectiveQuality]);
 
     const updateJobState = (nextJob: TtsBookJobProgress | null) => {
-        latestJobRef.current = nextJob;
         setJob(nextJob);
     };
-
-    useEffect(() => {
-        return () => {
-            cancelRequestedRef.current = true;
-            downloadAbortRef.current?.abort();
-
-            const latestJob = latestJobRef.current;
-            if (latestJob && (latestJob.status === 'queued' || latestJob.status === 'running')) {
-                cancelBookTtsJob(book.id, latestJob.jobId).catch(err => {
-                    console.error('[Offline TTS] Cancel on unmount failed:', err);
-                });
-            }
-        };
-    }, [book.id]);
 
     const pollUntilDone = async (bookId: number, jobId: string) => {
         while (!cancelRequestedRef.current) {
@@ -232,7 +217,7 @@ export default function OfflineTtsPanel({ book, selectedVoice, setSelectedVoice 
                 `Giọng: ${voiceLabel}`,
                 `Chất lượng: ${supportsBitrate ? `${qualityConfig.label} (${qualityConfig.bitrateKbps}kbps)` : 'mặc định của nhà cung cấp'}`,
                 `Dung lượng ước tính trên máy: ${supportsBitrate ? estimateText : `${estimateText} (tham khảo)`}`,
-                isExpensiveProvider ? 'Lưu ý: Vbee/MiniMax có thể dùng nhiều quota.' : '',
+                isExpensiveProvider ? 'Lưu ý: Vbee/MiniMax/Grok có thể dùng nhiều quota.' : '',
             ].filter(Boolean).join('\n'));
             if (!confirmed) {
                 setPhase('idle');

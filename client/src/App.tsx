@@ -8,7 +8,7 @@ import Auth from './components/Auth';
 import BookCard from './components/Library/BookCard';
 import HeroCarousel from './components/Library/HeroCarousel';
 import { Book, User } from './types';
-import { getAllBooks, deleteBook as deleteBookApi, uploadBook, getUploadStatus } from './services/apiService';
+import { getAllBooks, deleteBook as deleteBookApi, uploadBook, getUploadStatus, reanalyzeBookTtsHints } from './services/apiService';
 import { getErrorMessage } from './utils/errors';
 
 const MAX_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024;
@@ -40,6 +40,7 @@ function MainApp({
     const [activeHeroIndex, setActiveHeroIndex] = useState(0);
     const [showDashboard, setShowDashboard] = useState(false);
     const [showInfo, setShowInfo] = useState(false);
+    const [reanalyzingBookId, setReanalyzingBookId] = useState<number | null>(null);
 
     const showToast = (message: string, type: 'success' | 'error' = 'success') => {
         setToast({ message, type });
@@ -125,6 +126,21 @@ function MainApp({
         }
     };
 
+    const handleReanalyzeTtsHints = async (book: Book) => {
+        if (reanalyzingBookId !== null) return;
+
+        setReanalyzingBookId(book.id);
+        try {
+            const result = await reanalyzeBookTtsHints(book.id);
+            showToast(`Đã backfill ${result.updatedSegments}/${result.totalSegments} đoạn cho "${book.title}".`);
+            await loadBooks();
+        } catch (error) {
+            showToast(`Lỗi backfill hints: ${getErrorMessage(error, 'Không thể backfill ttsHints')}`, 'error');
+        } finally {
+            setReanalyzingBookId(null);
+        }
+    };
+
     if (loading) return <div className="min-h-screen bg-slate-900 flex items-center justify-center text-emerald-500 animate-pulse text-2xl font-black">TRẠM ĐỌC...</div>;
 
     if (selectedBookId !== null) {
@@ -194,15 +210,17 @@ function MainApp({
                             </svg>
                         </button>
 
-                        <button
-                            onClick={onLogout}
-                            className="p-2 md:p-3 bg-red-500/10 hover:bg-red-500/20 text-red-500 hover:text-red-400 rounded-xl transition-all border border-red-500/20 active:scale-95 md:ml-2"
-                            title="Đăng xuất"
-                        >
-                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 md:h-6 md:w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 17l5-5m0 0l-5-5m5 5H9m5 4v1a3 3 0 01-3 3H5a3 3 0 01-3-3V6a3 3 0 013-3h6a3 3 0 013 3v1" />
-                            </svg>
-                        </button>
+                        {!BYPASS_AUTH && (
+                            <button
+                                onClick={onLogout}
+                                className="p-2 md:p-3 bg-red-500/10 hover:bg-red-500/20 text-red-500 hover:text-red-400 rounded-xl transition-all border border-red-500/20 active:scale-95 md:ml-2"
+                                title="Đăng xuất"
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 md:h-6 md:w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 17l5-5m0 0l-5-5m5 5H9m5 4v1a3 3 0 01-3 3H5a3 3 0 01-3-3V6a3 3 0 013-3h6a3 3 0 013 3v1" />
+                                </svg>
+                            </button>
+                        )}
 
                         <label className="group relative cursor-pointer ml-1">
                             <input type="file" accept=".epub" onChange={handleFileUpload} disabled={uploading} className="hidden" />
@@ -337,7 +355,14 @@ function MainApp({
                                         </h3>
                                         <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2.5 md:gap-6">
                                             {authorBooks.map((book) => (
-                                                <BookCard key={book.id} book={book} onSelect={setSelectedBookId} onDelete={setDeleteConfirm} />
+                                                <BookCard
+                                                    key={book.id}
+                                                    book={book}
+                                                    onSelect={setSelectedBookId}
+                                                    onDelete={setDeleteConfirm}
+                                                    onReanalyzeTtsHints={handleReanalyzeTtsHints}
+                                                    reanalyzingTtsHints={reanalyzingBookId === book.id}
+                                                />
                                             ))}
                                         </div>
                                     </section>
@@ -346,7 +371,14 @@ function MainApp({
                     ) : (
                         <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2.5 md:gap-6 animate-in fade-in duration-500">
                             {filteredAndSortedBooks.map((book) => (
-                                <BookCard key={book.id} book={book} onSelect={setSelectedBookId} onDelete={setDeleteConfirm} />
+                                <BookCard
+                                    key={book.id}
+                                    book={book}
+                                    onSelect={setSelectedBookId}
+                                    onDelete={setDeleteConfirm}
+                                    onReanalyzeTtsHints={handleReanalyzeTtsHints}
+                                    reanalyzingTtsHints={reanalyzingBookId === book.id}
+                                />
                             ))}
                         </div>
                     )}
@@ -384,7 +416,7 @@ function MainApp({
 
 
 function App() {
-    const [token, setToken] = useState<string | null>(() => localStorage.getItem('token') || (BYPASS_AUTH ? LOCAL_AUTH_TOKEN : null));
+    const [token, setToken] = useState<string | null>(() => BYPASS_AUTH ? LOCAL_AUTH_TOKEN : localStorage.getItem('token'));
     const [books, setBooks] = useState<Book[]>([]);
     const [loading, setLoading] = useState(true);
     const [loadError, setLoadError] = useState<string | null>(null);

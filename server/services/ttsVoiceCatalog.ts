@@ -22,6 +22,7 @@ export type SegmentRole =
 export type TtsProvider =
     | 'vbee'
     | 'minimax'
+    | 'grok'
     | 'azure'
     | 'gemini'
     | 'google';
@@ -49,6 +50,18 @@ const MINIMAX_SINGLE_VOICES: Record<string, string> = {
     'minimax-mandarin-mature-woman': 'Chinese (Mandarin)_Mature_Woman',
     'minimax-vietnamese-kindhearted-girl': 'Vietnamese_kindhearted_girl',
 };
+
+const GROK_SINGLE_VOICES: Record<string, string> = {
+    'grok-eve': 'eve',
+    'grok-ara': 'ara',
+    'grok-rex': 'rex',
+    'grok-sal': 'sal',
+    'grok-leo': 'leo',
+};
+
+export function isSupportedGrokVoice(requestVoice: string): boolean {
+    return Object.prototype.hasOwnProperty.call(GROK_SINGLE_VOICES, requestVoice);
+}
 
 /**
  * First user-approved multi-voice profile. Maps each `TextSegment.role`
@@ -103,6 +116,27 @@ export function resolveTtsVoice(requestVoice: string, role: SegmentRole): Resolv
             cacheVoice: requestVoice,
             provider: 'minimax',
             providerVoiceId: MINIMAX_SINGLE_VOICES[requestVoice],
+        };
+    }
+
+    // Single-voice Grok selections. Keep public IDs safe and map to raw xAI
+    // voice IDs only at the provider boundary.
+    if (isSupportedGrokVoice(requestVoice)) {
+        return {
+            requestVoice,
+            cacheVoice: requestVoice,
+            provider: 'grok',
+            providerVoiceId: GROK_SINGLE_VOICES[requestVoice],
+        };
+    }
+    if (requestVoice.startsWith('grok-')) {
+        // Keep unknown Grok-like IDs away from Google fallback. Public routes
+        // reject these, and the provider rejects anything except raw ara/sal.
+        return {
+            requestVoice,
+            cacheVoice: requestVoice,
+            provider: 'grok',
+            providerVoiceId: requestVoice,
         };
     }
 

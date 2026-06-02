@@ -8,6 +8,7 @@ import {
     OFFLINE_TTS_QUALITIES,
     getStoredOfflineTtsQuality,
     OfflineTtsQuality,
+    isExpensiveTtsVoice,
     providerSupportsOfflineBitrate,
 } from '../../constants';
 import {
@@ -220,13 +221,6 @@ const LibraryPanel: React.FC<LibraryPanelProps> = ({
         refreshChapterStatuses().catch(err => console.error('[Offline chapter] Status refresh failed:', err));
     }, [refreshChapterStatuses]);
 
-    React.useEffect(() => {
-        const controllers = chapterAbortControllersRef.current;
-        return () => {
-            Object.values(controllers).forEach(controller => controller.abort());
-        };
-    }, []);
-
     const setChapterStatus = (status: ChapterOfflineStatus) => {
         setChapterStatuses(prev => ({ ...prev, [status.chapterId]: status }));
     };
@@ -258,7 +252,7 @@ const LibraryPanel: React.FC<LibraryPanelProps> = ({
         const existing = chapterStatuses[chapter.id];
         if (existing?.status === 'downloading') return;
 
-        const isExpensiveProvider = selectedVoice.startsWith('vbee-') || selectedVoice.startsWith('minimax-');
+        const isExpensiveProvider = isExpensiveTtsVoice(selectedVoice);
         let downloadVoice = selectedVoice;
         let downloadQuality = effectiveOfflineQuality;
         if (isExpensiveProvider) {

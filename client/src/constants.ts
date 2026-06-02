@@ -52,8 +52,32 @@ export const getStoredOfflineTtsQuality = (): OfflineTtsQuality => {
 export const providerSupportsOfflineBitrate = (voice: string) =>
     voice.startsWith('minimax-');
 
+export const isExpensiveTtsVoice = (voice: string) =>
+    voice.startsWith('vbee-') || voice.startsWith('minimax-') || voice.startsWith('grok-');
+
 export const ENABLED_TTS_VOICES = [
     { id: DEFAULT_TTS_VOICE, name: 'Ngạn', provider: 'Vbee', icon: '🎧' },
+    {
+        id: 'grok-eve',
+        name: 'Eve',
+        provider: 'Grok · Nữ',
+        icon: '🌤️',
+        description: 'Giọng nữ Grok sáng, energetic/upbeat',
+    },
+    {
+        id: 'grok-ara',
+        name: 'Ara',
+        provider: 'Grok · Nữ',
+        icon: '✨',
+        description: 'Giọng nữ Grok ấm, thân thiện, conversational',
+    },
+    {
+        id: 'grok-sal',
+        name: 'Sal',
+        provider: 'Grok · Nam',
+        icon: '🌙',
+        description: 'Giọng nam Grok mượt, ấm, versatile',
+    },
     { id: 'vbee-s_sg_male_thientam_ytstable_vc', name: 'Thiên Tâm', provider: 'Vbee', icon: '🎤' },
     { id: 'vbee-n_hanoi_female_nguyetnganhannha_story_vc', name: 'Nguyệt Nga', provider: 'Vbee', icon: '🌸' },
     {

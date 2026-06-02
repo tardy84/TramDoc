@@ -5,12 +5,23 @@ interface BookCardProps {
     book: Book;
     onSelect: (id: number) => void;
     onDelete: (confirm: { bookId: number, title: string }) => void;
+    onReanalyzeTtsHints?: (book: Book) => void;
+    reanalyzingTtsHints?: boolean;
 }
 
-export default function BookCard({ book, onSelect, onDelete }: BookCardProps) {
+export default function BookCard({ book, onSelect, onDelete, onReanalyzeTtsHints, reanalyzingTtsHints = false }: BookCardProps) {
     const isNew = !book.lastRead;
     const isCompleted = (book.progress || 0) === 100;
     const inProgress = (book.progress || 0) > 0 && (book.progress || 0) < 100;
+    const totalSegments = book.chapters.reduce((total, chapter) => total + chapter.segments.length, 0);
+    const hintedSegments = book.chapters.reduce(
+        (total, chapter) => total + chapter.segments.filter(segment => !!segment.ttsHints).length,
+        0
+    );
+    const hintPercent = totalSegments > 0 ? Math.round((hintedSegments / totalSegments) * 100) : 0;
+    const hasCompleteHints = totalSegments > 0 && hintedSegments === totalSegments;
+    const hasPartialHints = hintedSegments > 0 && hintedSegments < totalSegments;
+    const canBackfillHints = totalSegments > 0 && !hasCompleteHints;
 
     return (
         <div
@@ -47,6 +58,11 @@ export default function BookCard({ book, onSelect, onDelete }: BookCardProps) {
                     {inProgress && (
                         <span className="bg-indigo-500/90 backdrop-blur-md text-[9px] font-black uppercase tracking-widest text-white px-2 py-1 rounded shadow-lg border border-white/10">
                             {book.progress}%
+                        </span>
+                    )}
+                    {totalSegments > 0 && (
+                        <span className={`backdrop-blur-md text-[9px] font-black uppercase tracking-widest text-white px-2 py-1 rounded shadow-lg border border-white/10 ${hasCompleteHints ? 'bg-cyan-500/90' : hasPartialHints ? 'bg-amber-500/90' : 'bg-slate-700/90'}`}>
+                            {hasCompleteHints ? 'HINT OK' : hasPartialHints ? `HINT ${hintPercent}%` : 'NO HINT'}
                         </span>
                     )}
                 </div>
@@ -86,6 +102,27 @@ export default function BookCard({ book, onSelect, onDelete }: BookCardProps) {
                 <p className="text-slate-500 text-[10px] md:text-xs truncate font-medium">
                     {book.author || 'Tác giả ẩn danh'}
                 </p>
+                {totalSegments > 0 && (
+                    <div className="mt-2 flex items-center justify-between gap-1.5">
+                        <span className={`truncate text-[9px] font-black uppercase tracking-wider ${hasCompleteHints ? 'text-cyan-300' : 'text-amber-300'}`}>
+                            TTS hints {hintedSegments}/{totalSegments}
+                        </span>
+                        {canBackfillHints && onReanalyzeTtsHints && (
+                            <button
+                                type="button"
+                                disabled={reanalyzingTtsHints}
+                                onClick={(event) => {
+                                    event.stopPropagation();
+                                    onReanalyzeTtsHints(book);
+                                }}
+                                className="shrink-0 rounded-lg bg-cyan-500/15 px-2 py-1 text-[9px] font-black uppercase tracking-wider text-cyan-200 transition-colors hover:bg-cyan-500/25 disabled:cursor-not-allowed disabled:opacity-60"
+                                title="Backfill ttsHints metadata"
+                            >
+                                {reanalyzingTtsHints ? '...' : 'Backfill'}
+                            </button>
+                        )}
+                    </div>
+                )}
             </div>
         </div>
     );

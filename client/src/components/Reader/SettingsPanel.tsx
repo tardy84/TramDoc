@@ -15,12 +15,15 @@ interface SettingsPanelProps {
     setSleepTimer: (timer: number | null) => void;
     selectedVoice: string;
     setSelectedVoice: (voice: string) => void;
+    expressiveTts: boolean;
+    setExpressiveTts: (enabled: boolean) => void;
 }
 
 const SettingsPanel: React.FC<SettingsPanelProps> = ({
     showSettings, setShowSettings, theme, setTheme,
     fontSize, setFontSize, fontFamily, setFontFamily,
-    sleepTimer, setSleepTimer, selectedVoice, setSelectedVoice
+    sleepTimer, setSleepTimer, selectedVoice, setSelectedVoice,
+    expressiveTts, setExpressiveTts
 }) => {
     if (!showSettings) return null;
     return (
@@ -89,6 +92,28 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
                             </button>
                         ))}
                     </div>
+                </div>
+
+                {/* Đọc diễn cảm */}
+                <div>
+                    <label className="text-xs font-bold text-gray-400 uppercase tracking-widest block mb-4">Đọc diễn cảm</label>
+                    <button
+                        type="button"
+                        onClick={() => setExpressiveTts(!expressiveTts)}
+                        className={`w-full rounded-2xl border p-4 text-left transition-all ${expressiveTts ? 'border-cyan-400/50 bg-cyan-500/15 text-cyan-100' : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10'}`}
+                    >
+                        <div className="flex items-center justify-between gap-3">
+                            <div>
+                                <div className="text-sm font-black">{expressiveTts ? 'Đang bật' : 'Đang tắt'}</div>
+                                <p className="mt-1 text-[11px] leading-relaxed opacity-70">
+                                    Bật để request audio expressive (`ex1`) từ `ttsHints`. Hiệu quả rõ nhất với Grok; Vbee/MiniMax có thể vẫn degrade về clean text.
+                                </p>
+                            </div>
+                            <span className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${expressiveTts ? 'bg-cyan-400' : 'bg-white/20'}`}>
+                                <span className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow transition-transform ${expressiveTts ? 'translate-x-6' : 'translate-x-1'}`} />
+                            </span>
+                        </div>
+                    </button>
                 </div>
 
                 {/* Hẹn giờ tắt */}

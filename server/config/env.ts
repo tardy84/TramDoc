@@ -19,3 +19,10 @@ export function getRequiredEnv(name: string): string {
 }
 
 export const JWT_SECRET = getRequiredEnv('JWT_SECRET');
+
+export const JWT_LEGACY_SECRETS = (process.env.JWT_LEGACY_SECRETS || '')
+    .split(',')
+    .map(secret => secret.trim())
+    .filter(secret => secret.length > 0 && secret !== JWT_SECRET);
+
+export const JWT_VERIFY_SECRETS = [JWT_SECRET, ...JWT_LEGACY_SECRETS];

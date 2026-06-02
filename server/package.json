@@ -15,7 +15,8 @@
     "smoke:epub": "DATABASE_URL=${DATABASE_URL:-file:./prisma/dev.db} tsx scripts/smoke-epub-parser.ts",
     "smoke:epub-prosody": "tsx scripts/smoke-epub-prosody.ts",
     "smoke:tts-book-job": "tsx scripts/smoke-tts-book-job.ts",
-    "smoke:minimax": "tsx scripts/smoke-minimax-voices.ts"
+    "smoke:minimax": "tsx scripts/smoke-minimax-voices.ts",
+    "smoke:grok-voices": "tsx scripts/smoke-grok-voices.ts"
   },
   "keywords": [],
   "author": "",

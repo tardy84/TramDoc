@@ -1,26 +1,48 @@
-import { defineConfig } from 'vite';
+import { defineConfig, loadEnv, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 
-// https://vitejs.dev/config/
-export default defineConfig({
-    plugins: [react()],
-    build: {
-        outDir: 'dist',
+const PRODUCTION_ORIGIN = 'https://tramdoc.commocsan.cloud';
+
+const redirectToProduction = (): Plugin => ({
+    name: 'redirect-localhost-to-production',
+    configureServer(server) {
+        server.middlewares.use((req, res) => {
+            const target = new URL(req.originalUrl || req.url || '/', PRODUCTION_ORIGIN);
+            res.statusCode = 302;
+            res.setHeader('Location', target.toString());
+            res.end(`Redirecting to ${target.toString()}`);
+        });
     },
-    server: {
-        proxy: {
-            '/api': {
-                target: 'http://localhost:3005',
-                changeOrigin: true,
-            },
-            '/covers': {
-                target: 'http://localhost:3005',
-                changeOrigin: true,
-            },
-            '/audio': {
-                target: 'http://localhost:3005',
-                changeOrigin: true,
+});
+
+// https://vitejs.dev/config/
+export default defineConfig(({ mode }) => {
+    const env = loadEnv(mode, process.cwd(), '');
+    const shouldRedirectLocalhost = env.VITE_REDIRECT_TO_PRODUCTION === '1';
+
+    return {
+        plugins: [
+            react(),
+            ...(shouldRedirectLocalhost ? [redirectToProduction()] : []),
+        ],
+        build: {
+            outDir: 'dist',
+        },
+        server: {
+            proxy: {
+                '/api': {
+                    target: PRODUCTION_ORIGIN,
+                    changeOrigin: true,
+                },
+                '/covers': {
+                    target: PRODUCTION_ORIGIN,
+                    changeOrigin: true,
+                },
+                '/audio': {
+                    target: PRODUCTION_ORIGIN,
+                    changeOrigin: true,
+                }
             }
         }
-    }
+    };
 });

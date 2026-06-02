@@ -17,6 +17,7 @@ interface UseReaderAudioProps {
     setCurrentSegmentIndex: (index: number) => void;
     playbackSpeed: number;
     selectedVoice: string;
+    expressiveTts: boolean;
     nextChapter: () => void;
     getGlobalAudio: () => HTMLAudioElement | null;
     setGlobalAudio: (audio: HTMLAudioElement | null) => void;
@@ -31,6 +32,7 @@ export const useReaderAudio = ({
     setCurrentSegmentIndex,
     playbackSpeed,
     selectedVoice,
+    expressiveTts,
     nextChapter,
     getGlobalAudio,
     setGlobalAudio
@@ -109,13 +111,15 @@ export const useReaderAudio = ({
 
     const getOfflineQualityCandidates = useCallback(() => {
         const storedQuality = getStoredOfflineTtsQuality();
+        if (expressiveTts) return [];
+
         const candidates = [
             offlinePlaybackQualityRef.current,
             storedQuality,
             ...OFFLINE_TTS_QUALITIES.map(item => item.id),
         ].filter((quality): quality is OfflineTtsQuality => Boolean(quality));
         return Array.from(new Set(candidates));
-    }, []);
+    }, [expressiveTts]);
 
     const buildOfflineAudioKey = useCallback((
         chapterId: number,
@@ -402,7 +406,7 @@ export const useReaderAudio = ({
 
             try {
                 setGenerating(true);
-                const { audioFiles: urls } = await generateTTS(bookId, chapterId, selectedVoice, index, undefined, abortControllerRef.current?.signal);
+                const { audioFiles: urls } = await generateTTS(bookId, chapterId, selectedVoice, index, undefined, abortControllerRef.current?.signal, expressiveTts);
                 if (currentPlayId !== playIdRef.current || activeChapterIdRef.current !== chapterId) {
                     if (offlineObjectUrl) revokeOfflineObjectUrl(offlineObjectUrl);
                     return;
@@ -665,7 +669,7 @@ export const useReaderAudio = ({
             preloadUpcoming(index + 1);
         }
 
-    }, [audioFiles, bookId, buildOfflineAudioKey, chapters, clearPreloadedAudio, consumePrimedAudio, currentChapterIndex, createOfflineAudio, findPlayableUrlIndex, hasPlayableAudioUrl, nextChapter, normalizeAudioFilesForStart, playbackSpeed, selectedVoice, setChapters, stopAudioPlayback, setCurrentSegmentIndex, getGlobalAudio, setGlobalAudio, isSpeakableSegment, revokeOfflineObjectUrl, getOfflineQualityCandidates, markBadOfflineAudio]);
+    }, [audioFiles, bookId, buildOfflineAudioKey, chapters, clearPreloadedAudio, consumePrimedAudio, currentChapterIndex, createOfflineAudio, expressiveTts, findPlayableUrlIndex, hasPlayableAudioUrl, nextChapter, normalizeAudioFilesForStart, playbackSpeed, selectedVoice, setChapters, stopAudioPlayback, setCurrentSegmentIndex, getGlobalAudio, setGlobalAudio, isSpeakableSegment, revokeOfflineObjectUrl, getOfflineQualityCandidates, markBadOfflineAudio]);
 
     const resumePausedAudio = useCallback((chapterId: number) => {
         const paused = pausedAudioRef.current;
@@ -777,7 +781,7 @@ export const useReaderAudio = ({
 
             // Ask the server for signed, short-lived audio URLs. This avoids exposing
             // the long-lived login JWT in media URLs while still enabling <audio> playback.
-            const { audioFiles: urls } = await generateTTS(bookId, chapter.id, selectedVoice, targetIndex, undefined, controller.signal);
+            const { audioFiles: urls } = await generateTTS(bookId, chapter.id, selectedVoice, targetIndex, undefined, controller.signal, expressiveTts);
 
             if (controller.signal.aborted || activeChapterIdRef.current !== chapter.id) return;
 
@@ -810,7 +814,7 @@ export const useReaderAudio = ({
                 abortControllerRef.current = null;
             }
         }
-    }, [bookId, chapters, currentChapterIndex, currentSegmentIndex, playAudio, setChapters, selectedVoice, getGlobalAudio, setGlobalAudio, stopAudioPlayback, clearPreloadedAudio, revokeOfflineObjectUrl, resumePausedAudio, findOfflineAudioIndex, findNextSpeakableSegmentIndex, findPlayableUrlIndex, nextChapter, normalizeAudioFilesForStart, primeAudioForUserGesture, hasPlayableAudioUrl]);
+    }, [bookId, chapters, currentChapterIndex, currentSegmentIndex, playAudio, setChapters, selectedVoice, expressiveTts, getGlobalAudio, setGlobalAudio, stopAudioPlayback, clearPreloadedAudio, revokeOfflineObjectUrl, resumePausedAudio, findOfflineAudioIndex, findNextSpeakableSegmentIndex, findPlayableUrlIndex, nextChapter, normalizeAudioFilesForStart, primeAudioForUserGesture, hasPlayableAudioUrl]);
 
     const playSegment = useCallback(async (startIndex: number) => {
         const chapter = chapters[currentChapterIndex];
@@ -936,15 +940,16 @@ export const useReaderAudio = ({
         }
     }, [currentSegmentIndex, playSegment]);
 
-    const prevVoiceRef = useRef(selectedVoice);
+    const prevPlaybackProfileRef = useRef(`${selectedVoice}:${expressiveTts ? 'ex1' : 'ex0'}`);
 
     // Auto-play trigger for chapter transitions or voice changes
     useEffect(() => {
         const chapter = chapters[currentChapterIndex];
         if (!chapter) return;
 
-        if (prevVoiceRef.current !== selectedVoice) {
-            prevVoiceRef.current = selectedVoice;
+        const playbackProfile = `${selectedVoice}:${expressiveTts ? 'ex1' : 'ex0'}`;
+        if (prevPlaybackProfileRef.current !== playbackProfile) {
+            prevPlaybackProfileRef.current = playbackProfile;
             ++playIdRef.current; // Ignore old voice retries/errors after URLs are cleared.
             const currentGlobal = getGlobalAudio();
             if (currentGlobal) {
@@ -1020,7 +1025,7 @@ export const useReaderAudio = ({
                 generateAudio(nextSegmentIndex);
             }
         }
-    }, [currentChapterIndex, chapters, isPlaying, currentSegmentIndex, generating, audioFiles, getGlobalAudio, setGlobalAudio, playAudio, generateAudio, selectedVoice, clearPreloadedAudio, revokeOfflineObjectUrl, playbackSpeed, hasPlayableAudioUrl]);
+    }, [currentChapterIndex, chapters, isPlaying, currentSegmentIndex, generating, audioFiles, getGlobalAudio, setGlobalAudio, playAudio, generateAudio, selectedVoice, expressiveTts, clearPreloadedAudio, revokeOfflineObjectUrl, playbackSpeed, hasPlayableAudioUrl]);
 
     return {
         isPlaying,

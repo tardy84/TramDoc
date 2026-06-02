@@ -14,6 +14,8 @@ export interface Segment {
     content: string;
     role: string;
     orderIndex: number;
+    ttsHints?: string | null;
+    audioUrl?: string | null;
 }
 
 export interface Chapter {

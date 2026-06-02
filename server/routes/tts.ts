@@ -11,7 +11,8 @@ import { AzureTTSService } from '../services/azureTTS.js';
 import { MiniMaxTTSService } from '../services/minimaxTTS.js';
 import { GeminiTTSService } from '../services/geminiTTS.js';
 import { VbeeTTSService } from '../services/vbeeTTS.js';
-import { MINIMAX_NATURAL_PROFILE_ID, resolveTtsVoice, ResolvedTtsVoice } from '../services/ttsVoiceCatalog.js';
+import { GrokTTSService } from '../services/grokTTS.js';
+import { MINIMAX_NATURAL_PROFILE_ID, isSupportedGrokVoice, resolveTtsVoice, ResolvedTtsVoice } from '../services/ttsVoiceCatalog.js';
 import { renderTtsText } from '../services/ttsTextRenderer.js';
 import {
     cancelTtsBookJob,
@@ -28,6 +29,7 @@ const azureTTS = new AzureTTSService();
 const minimaxTTS = new MiniMaxTTSService();
 const geminiTTS = new GeminiTTSService();
 const vbeeTTS = new VbeeTTSService();
+const grokTTS = new GrokTTSService();
 
 // Helper for generating a specific segment (Deduped + Safe)
 const generatingFiles = new Set<string>();
@@ -43,6 +45,7 @@ const VBEE_SHORT_SEGMENT_MAX_CHARS = 140;
 const VBEE_SHORT_RUN_MIN_SEGMENTS = 3;
 const VBEE_SHORT_RUN_LOOKAHEAD_COUNT = 5;
 const VBEE_SHORT_RUN_EARLY_WARMUP_COUNT = 3;
+const GROK_TTS_CACHE_VERSION = 'grok-tts-voice-id-v1';
 const ttsRequests = new Map<number, { count: number; resetAt: number }>();
 type OfflineTtsQuality = 'low' | 'standard' | 'high';
 const DEFAULT_OFFLINE_TTS_QUALITY: OfflineTtsQuality = 'standard';
@@ -74,6 +77,18 @@ function isSafeVoice(voice: unknown): voice is string {
         !voice.includes('..');
 }
 
+function getVoiceValidationError(voice: unknown): string | null {
+    if (!isSafeVoice(voice)) return 'Giọng đọc không hợp lệ';
+    if (voice.startsWith('grok-') && !isSupportedGrokVoice(voice)) {
+        return 'Grok chỉ hỗ trợ giọng Ara hoặc Sal';
+    }
+    return null;
+}
+
+function isSupportedVoiceRequest(voice: unknown): voice is string {
+    return getVoiceValidationError(voice) === null;
+}
+
 function buildAudioFileName(bookId: number, chapterId: number, voice: string, segmentIndex: number): string {
     return `${bookId}_${chapterId}_${voice}_${segmentIndex}.mp3`;
 }
@@ -102,6 +117,7 @@ function buildSegmentAudioIdentity(
     const cacheMaterial = JSON.stringify({
         segmentId: segment.id ?? null,
         provider: resolved.provider,
+        providerCacheVersion: resolved.provider === 'grok' ? GROK_TTS_CACHE_VERSION : null,
         cacheVoice,
         expressive,
         rendererVersion: rendered.rendererVersion,
@@ -134,6 +150,8 @@ function selectTtsService(provider: ResolvedTtsVoice['provider']) {
             return vbeeTTS;
         case 'minimax':
             return minimaxTTS;
+        case 'grok':
+            return grokTTS;
         case 'azure':
             return azureTTS;
         case 'gemini':
@@ -450,6 +468,7 @@ async function generateSegmentsInBackground(bookId: number, chapterId: number, v
 function getBookJobDelayMs(voice: string): number {
     if (voice.startsWith('vbee-')) return 750;
     if (voice.startsWith('minimax-')) return 250;
+    if (voice.startsWith('grok-')) return 250;
     return 0;
 }
 
@@ -460,6 +479,10 @@ function getMissingProviderConfig(voice: string): string | null {
     }
     if (voice.startsWith('minimax-')) {
         if (!process.env.MINIMAX_API_KEY) return 'MiniMax is not configured';
+        return null;
+    }
+    if (voice.startsWith('grok-')) {
+        if (!process.env.XAI_API_KEY) return 'Grok TTS is not configured';
         return null;
     }
     if (voice.startsWith('gemini-')) {
@@ -475,7 +498,7 @@ function getMissingProviderConfig(voice: string): string | null {
 }
 
 async function generateSegment(bookId: number, chapterId: number, segmentIndex: number, voice: string, quality?: OfflineTtsQuality, expressive = false): Promise<boolean> {
-    if (!isSafeVoice(voice) || !Number.isInteger(bookId) || !Number.isInteger(chapterId) || !Number.isInteger(segmentIndex) || segmentIndex < 0) {
+    if (getVoiceValidationError(voice) || !Number.isInteger(bookId) || !Number.isInteger(chapterId) || !Number.isInteger(segmentIndex) || segmentIndex < 0) {
         return false;
     }
 
@@ -661,7 +684,9 @@ router.get('/books/:bookId/tts/status', authenticateJWT, async (req: AuthRequest
         if (!parsedBookId) return res.status(400).json({ error: 'Book ID không hợp lệ' });
 
         const voice = req.query.voice;
-        if (!isSafeVoice(voice)) return res.status(400).json({ error: 'Giọng đọc không hợp lệ' });
+        if (!isSupportedVoiceRequest(voice)) {
+            return res.status(400).json({ error: getVoiceValidationError(voice) || 'Giọng đọc không hợp lệ' });
+        }
         if (hasInvalidOfflineTtsQuality(req.query.quality)) return res.status(400).json({ error: 'Chất lượng offline không hợp lệ' });
         const quality = parseOfflineTtsQuality(req.query.quality);
         const expressive = parseExpressiveFlag(req.query.expressive);
@@ -733,14 +758,16 @@ router.post('/books/:bookId/tts/jobs', authenticateJWT, async (req: AuthRequest,
         if (!parsedBookId) return res.status(400).json({ error: 'Book ID không hợp lệ' });
 
         const { voice } = req.body;
-        if (!isSafeVoice(voice)) return res.status(400).json({ error: 'Giọng đọc không hợp lệ' });
+        if (!isSupportedVoiceRequest(voice)) {
+            return res.status(400).json({ error: getVoiceValidationError(voice) || 'Giọng đọc không hợp lệ' });
+        }
         if (hasInvalidOfflineTtsQuality(req.body.quality)) return res.status(400).json({ error: 'Chất lượng offline không hợp lệ' });
         const quality = parseOfflineTtsQuality(req.body.quality) ?? DEFAULT_OFFLINE_TTS_QUALITY;
         const expressive = parseExpressiveFlag(req.body.expressive);
 
-        if ((voice.startsWith('vbee-') || voice.startsWith('minimax-')) && req.body.confirmExpensiveProvider !== true) {
+        if ((voice.startsWith('vbee-') || voice.startsWith('minimax-') || voice.startsWith('grok-')) && req.body.confirmExpensiveProvider !== true) {
             return res.status(400).json({
-                error: 'Tạo toàn bộ sách bằng Vbee/MiniMax có thể chậm và tốn quota. Vui lòng xác nhận trước khi chạy.'
+                error: 'Tạo toàn bộ sách bằng Vbee/MiniMax/Grok có thể chậm và tốn quota. Vui lòng xác nhận trước khi chạy.'
             });
         }
 
@@ -823,8 +850,8 @@ router.get('/books/:bookId/chapters/:chapterId/tts/status', authenticateJWT, asy
         }
 
         const voice = req.query.voice;
-        if (!isSafeVoice(voice)) {
-            return res.status(400).json({ error: 'Giọng đọc không hợp lệ' });
+        if (!isSupportedVoiceRequest(voice)) {
+            return res.status(400).json({ error: getVoiceValidationError(voice) || 'Giọng đọc không hợp lệ' });
         }
         const expressive = parseExpressiveFlag(req.query.expressive);
 
@@ -879,8 +906,8 @@ router.post('/books/:bookId/chapters/:chapterId/tts/regenerate', authenticateJWT
         }
 
         const { voice } = req.body;
-        if (!isSafeVoice(voice)) {
-            return res.status(400).json({ error: 'Giọng đọc không hợp lệ' });
+        if (!isSupportedVoiceRequest(voice)) {
+            return res.status(400).json({ error: getVoiceValidationError(voice) || 'Giọng đọc không hợp lệ' });
         }
         const expressive = parseExpressiveFlag(req.body.expressive);
 
@@ -976,8 +1003,8 @@ router.post('/books/:bookId/chapters/:chapterId/tts', authenticateJWT, async (re
         await fs.mkdir(audioDir, { recursive: true });
 
         const { voice } = req.body;
-        if (!isSafeVoice(voice)) {
-            return res.status(400).json({ error: 'Giọng đọc không hợp lệ' });
+        if (!isSupportedVoiceRequest(voice)) {
+            return res.status(400).json({ error: getVoiceValidationError(voice) || 'Giọng đọc không hợp lệ' });
         }
         if (hasInvalidOfflineTtsQuality(req.body.quality)) {
             return res.status(400).json({ error: 'Chất lượng offline không hợp lệ' });
