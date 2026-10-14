@@ -14,11 +14,13 @@ import {
     cancelBookTtsJob,
     getBookTtsStatus,
     getBookTtsJob,
+    regenerateSegmentTts,
     startBookTtsJob,
     TtsBookCacheStatus,
     TtsBookJobProgress,
 } from '../../services/apiService';
 import {
+    deleteOfflineAudioSegment,
     deleteOfflineVoice,
     downloadChapterAudioOffline,
     getOfflineVoiceStorageUsage,
@@ -227,12 +229,28 @@ export default function OfflineTtsPanel({ book, selectedVoice, setSelectedVoice 
         setPhase('generating');
 
         try {
+            // Pre-flight cost meter: characters are exact (from the DB), audio minutes use
+            // this voice's measured narration speed when available, and a dollar figure only
+            // appears when the provider has a known per-character rate.
+            const costEstimate = cacheStatus?.estimate;
+            const costLine = costEstimate && costEstimate.characters > 0
+                ? [
+                    `Còn phải tạo: ${costEstimate.characters.toLocaleString('vi-VN')} ký tự`,
+                    costEstimate.estimatedSeconds ? `≈ ${Math.max(1, Math.round(costEstimate.estimatedSeconds / 60))} phút audio` : '',
+                    costEstimate.estimatedCostUsd !== null
+                        ? `≈ $${costEstimate.estimatedCostUsd.toFixed(2)} (${costEstimate.ratePerMillionChars}$/1 triệu ký tự${costEstimate.rateSource ? ` · ${costEstimate.rateSource}` : ''})`
+                        : 'chưa có đơn giá cho giọng này, chỉ hiện ký tự/thời lượng',
+                    costEstimate.secondsFromMeasuredAudio ? 'thời lượng theo tốc độ đọc thực của sách' : '',
+                ].filter(Boolean).join(' · ')
+                : '';
+
             const confirmed = window.confirm([
                 'Tải giọng đọc offline cho toàn bộ sách?',
                 '',
                 `Giọng: ${voiceLabel}`,
                 `Chất lượng: ${supportsBitrate ? `${qualityConfig.label} (${qualityConfig.bitrateKbps}kbps)` : 'mặc định của nhà cung cấp'}`,
                 `Dung lượng ước tính trên máy: ${supportsBitrate ? estimateText : `${estimateText} (tham khảo)`}`,
+                costLine,
                 isExpensiveProvider ? 'Lưu ý: Vbee/MiniMax/Grok có thể dùng nhiều quota.' : '',
             ].filter(Boolean).join('\n'));
             if (!confirmed) {
@@ -295,6 +313,51 @@ export default function OfflineTtsPanel({ book, selectedVoice, setSelectedVoice 
 
         await deleteOfflineVoice(book.id, selectedVoice, effectiveQuality);
         await refreshOfflineUsage();
+    };
+
+    const staleChapters = (cacheStatus?.chapters ?? []).filter(chapter => (chapter.hintsStaleIndexes?.length ?? 0) > 0);
+    const staleSegmentCount = staleChapters.reduce((sum, chapter) => sum + (chapter.hintsStaleIndexes?.length ?? 0), 0);
+
+    /**
+     * Audio recorded before a prosody change still plays, but at the old pace/tone.
+     * Regenerate exactly those segments, drop their local copies and re-download the
+     * affected chapters so offline playback matches the current settings too.
+     */
+    const regenerateStaleAudio = async () => {
+        if (isBusy || staleSegmentCount === 0) return;
+
+        const confirmed = window.confirm([
+            `Tạo lại ${staleSegmentCount} đoạn audio ở ${staleChapters.length} chương?`,
+            '',
+            'Các đoạn này được tạo bằng tốc độ/giọng đọc cũ nên nghe lệch so với cài đặt hiện tại.',
+            isExpensiveProvider ? 'Vbee/MiniMax/Grok sẽ tốn quota tương ứng.' : '',
+            'Audio mới sẽ được tải lại vào máy cho những đoạn này.',
+        ].filter(Boolean).join('\n'));
+        if (!confirmed) return;
+
+        cancelRequestedRef.current = false;
+        setError(null);
+        setPhase('generating');
+        try {
+            for (const chapter of staleChapters) {
+                for (const segmentIndex of chapter.hintsStaleIndexes ?? []) {
+                    if (cancelRequestedRef.current) {
+                        setPhase('cancelled');
+                        return;
+                    }
+                    await regenerateSegmentTts(book.id, chapter.chapterId, selectedVoice, segmentIndex);
+                    await deleteOfflineAudioSegment(book.id, chapter.chapterId, selectedVoice, segmentIndex, effectiveQuality);
+                }
+                await downloadChapterAudioOffline(book.id, chapter.chapterId, selectedVoice, effectiveQuality, undefined, undefined);
+            }
+            setCacheStatus(await getBookTtsStatus(book.id, selectedVoice, effectiveQuality));
+            await refreshOfflineUsage();
+            setPhase('done');
+        } catch (err) {
+            console.error('[Offline TTS] Regenerate stale audio failed:', err);
+            setError(getErrorMessage(err, 'Không tạo lại được các đoạn audio cũ.'));
+            setPhase('error');
+        }
     };
 
     return (
@@ -375,6 +438,42 @@ export default function OfflineTtsPanel({ book, selectedVoice, setSelectedVoice 
                     <span className="font-bold text-white">{estimateText}</span> cho giọng này
                     <span className="text-white/40"> · khoảng {estimate.chars.toLocaleString('vi-VN')} ký tự</span>
                 </div>
+
+                {cacheStatus?.estimate && cacheStatus.estimate.characters > 0 && (
+                    <div className="rounded-lg bg-slate-900/70 px-3 py-2 text-xs text-white/70">
+                        Còn phải tạo{' '}
+                        <span className="font-bold text-white">{cacheStatus.estimate.characters.toLocaleString('vi-VN')}</span> ký tự
+                        {cacheStatus.estimate.estimatedSeconds ? (
+                            <> · ≈ <span className="font-bold text-white">{Math.max(1, Math.round(cacheStatus.estimate.estimatedSeconds / 60))}</span> phút audio</>
+                        ) : null}
+                        {cacheStatus.estimate.estimatedCostUsd !== null ? (
+                            <> · ≈ <span className="font-bold text-emerald-200">${cacheStatus.estimate.estimatedCostUsd.toFixed(2)}</span>
+                                <span className="text-white/40"> ({cacheStatus.estimate.ratePerMillionChars}$/1 triệu ký tự)</span>
+                            </>
+                        ) : (
+                            <span className="text-white/40"> · chưa có đơn giá cho giọng này</span>
+                        )}
+                        {cacheStatus.estimate.secondsFromMeasuredAudio && (
+                            <div className="mt-1 text-[11px] text-white/40">Thời lượng tính theo tốc độ đọc thực của sách này.</div>
+                        )}
+                    </div>
+                )}
+
+                {staleSegmentCount > 0 && (
+                    <div className="rounded-lg border border-amber-300/30 bg-amber-400/10 px-3 py-2 text-xs text-amber-100">
+                        <div>
+                            <span className="font-bold">{staleSegmentCount} đoạn</span> ở {staleChapters.length} chương đang dùng audio tạo bằng tốc độ/giọng đọc cũ.
+                        </div>
+                        <button
+                            type="button"
+                            disabled={isBusy}
+                            onClick={regenerateStaleAudio}
+                            className="mt-2 rounded-lg border border-amber-200/40 px-2 py-1 font-bold text-amber-100 disabled:cursor-not-allowed disabled:opacity-40 hover:bg-amber-400/20"
+                        >
+                            Tạo lại audio cho khớp
+                        </button>
+                    </div>
+                )}
 
                 <div className="flex items-center justify-between gap-3 text-xs text-white/60">
                     <span>Đã lưu trên máy: {formatMb(offlineUsageBytes)}</span>

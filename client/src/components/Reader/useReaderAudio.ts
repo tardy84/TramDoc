@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { Chapter } from './types';
-import { generateTTS } from '../../services/apiService';
+import { generateTTS, warmChapterTts } from '../../services/apiService';
 import { deleteOfflineAudioSegment, getOfflineAudio } from '../../services/offlineManager';
 import { getStoredOfflineTtsQuality, isOfflineTtsQuality, OFFLINE_TTS_QUALITIES, OfflineTtsQuality, resolveApiUrl } from '../../constants';
 import { getErrorMessage, isAbortError } from '../../utils/errors';
@@ -61,6 +61,47 @@ export const useReaderAudio = ({
     } | null>(null);
     // Map of segment index -> URL for current chapter
     const activeUrlMapRef = useRef<Map<number, string>>(new Map());
+    // Segments already warmed on the server (key -> timestamp), so scrolling through a
+    // chapter does not spam warm requests for the same position.
+    const warmedSegmentsRef = useRef<Map<string, number>>(new Map());
+
+    const WARM_DEBOUNCE_MS = 60_000;
+    const WARM_NEAR_CHAPTER_END = 3;
+
+    /**
+     * Ask the server to pre-generate what we are about to play. The server bounds how
+     * many segments it warms (2 for Vbee/MiniMax/Grok, 6 otherwise) and skips anything
+     * already cached, so this only removes the "đang tạo audio" gap at chapter
+     * transitions and after skipping ahead — it never generates the whole book.
+     */
+    const warmAhead = useCallback((chapterIdx: number, fromIndex: number) => {
+        if (typeof navigator !== 'undefined' && !navigator.onLine) return;
+        const chapter = chapters[chapterIdx];
+        if (!chapter) return;
+
+        const nearEnd = fromIndex >= chapter.segments.length - WARM_NEAR_CHAPTER_END;
+        const nextChapter = nearEnd ? chapters[chapterIdx + 1] : undefined;
+        const targetChapter = nextChapter ?? chapter;
+        const from = nextChapter ? -1 : fromIndex;
+        const key = `${targetChapter.id}:${from}`;
+
+        const now = Date.now();
+        const warmedAt = warmedSegmentsRef.current.get(key);
+        if (warmedAt && now - warmedAt < WARM_DEBOUNCE_MS) return;
+        warmedSegmentsRef.current.set(key, now);
+        if (warmedSegmentsRef.current.size > 50) {
+            const cutoff = now - WARM_DEBOUNCE_MS;
+            for (const [entryKey, timestamp] of warmedSegmentsRef.current) {
+                if (timestamp < cutoff) warmedSegmentsRef.current.delete(entryKey);
+            }
+        }
+
+        warmChapterTts(bookId, targetChapter.id, selectedVoice, {
+            fromSegmentIndex: from,
+        }).catch(() => {
+            // Warming is best-effort: playback itself still generates on demand.
+        });
+    }, [bookId, chapters, selectedVoice]);
 
     const revokeOfflineObjectUrl = useCallback((url?: string) => {
         if (!url || !offlineObjectUrlsRef.current.has(url)) return;
@@ -438,6 +479,7 @@ export const useReaderAudio = ({
                     setHasAudioSession(true);
                     setIsPlaying(true);
                     preloadUpcoming(index + 1);
+                    warmAhead(chapterIdx, index);
                     reuseAudio.play().catch(error => {
                         if (error.name === 'AbortError') return;
                         if (currentPlayId !== playIdRef.current) return;
@@ -663,9 +705,11 @@ export const useReaderAudio = ({
         // Preload upcoming segments immediately (no delay)
         if (activeChapterIdRef.current === chapterId) {
             preloadUpcoming(index + 1);
+            // ...and ask the server to generate what is still missing ahead of us.
+            warmAhead(chapterIdx, index);
         }
 
-    }, [audioFiles, bookId, buildOfflineAudioKey, chapters, clearPreloadedAudio, consumePrimedAudio, currentChapterIndex, createOfflineAudio, findPlayableUrlIndex, hasPlayableAudioUrl, nextChapter, normalizeAudioFilesForStart, playbackSpeed, selectedVoice, setChapters, stopAudioPlayback, setCurrentSegmentIndex, getGlobalAudio, setGlobalAudio, isSpeakableSegment, revokeOfflineObjectUrl, getOfflineQualityCandidates, markBadOfflineAudio]);
+    }, [audioFiles, bookId, buildOfflineAudioKey, chapters, clearPreloadedAudio, consumePrimedAudio, currentChapterIndex, createOfflineAudio, findPlayableUrlIndex, hasPlayableAudioUrl, nextChapter, normalizeAudioFilesForStart, playbackSpeed, selectedVoice, setChapters, stopAudioPlayback, setCurrentSegmentIndex, getGlobalAudio, setGlobalAudio, isSpeakableSegment, revokeOfflineObjectUrl, getOfflineQualityCandidates, markBadOfflineAudio, warmAhead]);
 
     const resumePausedAudio = useCallback((chapterId: number) => {
         const paused = pausedAudioRef.current;

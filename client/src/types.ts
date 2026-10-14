@@ -47,6 +47,8 @@ export interface ThemeStyles {
     btn: string;
     backBtn: string;
     paper: string;
+    /** Highlight applied to the sentence currently being spoken (reader TTS follow-along). */
+    sentenceActive?: string;
 }
 
 export interface AdminBook extends Book {
