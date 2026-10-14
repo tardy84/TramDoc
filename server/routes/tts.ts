@@ -21,6 +21,7 @@ import {
 } from '../services/ttsAlignment.js';
 import { trySynthesizeWithTiming, TIMING_CAPABLE_PROVIDERS } from '../services/ttsTiming.js';
 import { probeDurationMs } from '../services/audioDuration.js';
+import { buildTtsCostEstimate, countSpeakableCharacters } from '../services/ttsCost.js';
 import {
     cancelTtsBookJob,
     createTtsBookJob,
@@ -229,6 +230,30 @@ async function isSegmentAudioCached(filePath: string, metadataPath: string, segm
         return metadata.contentHash === getSegmentContentHash(segment, voice);
     } catch {
         return false;
+    }
+}
+
+/**
+ * Same check as `isSegmentAudioCached`, but returns the sidecar too. Status endpoints need
+ * the metadata (duration for cost metering, hintsHash for staleness) and reading the file
+ * twice per segment would double the I/O of a whole-book scan.
+ */
+async function readSegmentAudioState(
+    filePath: string,
+    metadataPath: string,
+    segment: SegmentForAudioCache,
+    voice: string
+): Promise<{ cached: boolean; metadata: StoredAudioMetadata | null }> {
+    try {
+        const [metadataRaw] = await Promise.all([
+            fs.readFile(metadataPath, 'utf8'),
+            fs.access(filePath),
+        ]);
+        const metadata = JSON.parse(metadataRaw) as StoredAudioMetadata & { contentHash?: unknown };
+        const cached = metadata.contentHash === getSegmentContentHash(segment, voice);
+        return { cached, metadata: cached ? metadata : null };
+    } catch {
+        return { cached: false, metadata: null };
     }
 }
 
@@ -818,8 +843,12 @@ router.get('/books/:bookId/tts/status', authenticateJWT, async (req: AuthRequest
             if (!book) return res.status(404).json({ error: 'Book not found' });
         }
 
-        const totals = { total: 0, cached: 0, stale: 0, missing: 0, skipped: 0 };
+        const totals = { total: 0, cached: 0, stale: 0, missing: 0, skipped: 0, characters: 0, missingCharacters: 0, hintsStale: 0 };
         const chapterStatuses = [];
+        // Characters whose audio is already cached: the reader does not pay for these again,
+        // but their measured durations tell us the real narration speed of this book.
+        let measuredCharacters = 0;
+        let measuredSeconds = 0;
 
         for (const chapter of chapters) {
             const chapterStatus = {
@@ -830,6 +859,11 @@ router.get('/books/:bookId/tts/status', authenticateJWT, async (req: AuthRequest
                 stale: 0,
                 missing: 0,
                 skipped: 0,
+                characters: 0,
+                missingCharacters: 0,
+                /** Cached audio generated with older prosody hints (tone/pace/pitch). */
+                hintsStale: 0,
+                hintsStaleIndexes: [] as number[],
             };
 
             for (const segment of chapter.segments) {
@@ -842,28 +876,58 @@ router.get('/books/:bookId/tts/status', authenticateJWT, async (req: AuthRequest
                 chapterStatus.total++;
                 totals.total++;
 
+                const speakableChars = countSpeakableCharacters([segment.content]);
+                chapterStatus.characters += speakableChars;
+                totals.characters += speakableChars;
+
                 const fileName = buildSegmentAudioFileName(parsedBookId, chapter.id, voice, segment, quality, expressive);
                 const filePath = resolveAudioPath(fileName);
                 const metadataPath = resolveAudioMetadataPath(fileName);
                 if (!filePath || !metadataPath) return res.status(400).json({ error: 'Tên file audio không hợp lệ' });
 
                 const identity = buildSegmentAudioIdentity(voice, segment, quality, expressive);
-                if (await isSegmentAudioCached(filePath, metadataPath, segment, identity.fileCacheVoice)) {
+                const { cached, metadata } = await readSegmentAudioState(filePath, metadataPath, segment, identity.fileCacheVoice);
+                if (cached) {
                     chapterStatus.cached++;
                     totals.cached++;
+                    // One sidecar read gives both the real audio length (for cost metering)
+                    // and the prosody hints it was generated with.
+                    const durationMs = Number(metadata?.durationMs);
+                    if (Number.isFinite(durationMs) && durationMs > 0) {
+                        measuredCharacters += speakableChars;
+                        measuredSeconds += durationMs / 1000;
+                    }
+                    const currentHintsHash = getSegmentHintsHash(segment);
+                    if (metadata?.hintsHash && currentHintsHash && metadata.hintsHash !== currentHintsHash) {
+                        chapterStatus.hintsStale++;
+                        chapterStatus.hintsStaleIndexes.push(segment.orderIndex);
+                        totals.hintsStale++;
+                    }
                 } else if (await doesFileExist(filePath)) {
                     chapterStatus.stale++;
                     totals.stale++;
+                    chapterStatus.missingCharacters += speakableChars;
+                    totals.missingCharacters += speakableChars;
                 } else {
                     chapterStatus.missing++;
                     totals.missing++;
+                    chapterStatus.missingCharacters += speakableChars;
+                    totals.missingCharacters += speakableChars;
                 }
             }
 
             chapterStatuses.push(chapterStatus);
         }
 
-        return res.json({ ...totals, chapters: chapterStatuses });
+        // What the user is actually about to spend: only the text that still needs audio.
+        const estimate = buildTtsCostEstimate({
+            voice,
+            characters: totals.missingCharacters,
+            measuredSeconds,
+            measuredCharacters,
+        });
+
+        return res.json({ ...totals, estimate, chapters: chapterStatuses });
     } catch (error: any) {
         console.error('Error reading book TTS status:', getSafeErrorMessage(error));
         return res.status(500).json({ error: error.message });
@@ -990,32 +1054,52 @@ router.get('/books/:bookId/chapters/:chapterId/tts/status', authenticateJWT, asy
         let stale = 0;
         let missing = 0;
         let hintsStale = 0;
+        let characters = 0;
+        const hintsStaleIndexes: number[] = [];
+        const missingIndexes: number[] = [];
 
         for (let i = 0; i < chapter.segments.length; i++) {
             const segment = chapter.segments[i];
+            if (isSpeakableSegmentContent(segment.content)) {
+                characters += countSpeakableCharacters([segment.content]);
+            }
             const fileName = buildSegmentAudioFileName(parsedBookId, parsedChapterId, voice, segment, undefined, expressive);
             const filePath = resolveAudioPath(fileName);
             const metadataPath = resolveAudioMetadataPath(fileName);
             if (!filePath || !metadataPath) return res.status(400).json({ error: 'Tên file audio không hợp lệ' });
 
             const identity = buildSegmentAudioIdentity(voice, segment, undefined, expressive);
-            if (await isSegmentAudioCached(filePath, metadataPath, segment, identity.fileCacheVoice)) {
+            const { cached: isCached, metadata } = await readSegmentAudioState(filePath, metadataPath, segment, identity.fileCacheVoice);
+            if (isCached) {
                 cached++;
                 // Audio is reused, but the prosody hints it was generated with may have
                 // changed (tone/pace/pitch). Report it instead of silently playing stale audio.
-                const metadata = await readAudioMetadata(metadataPath);
                 const currentHintsHash = getSegmentHintsHash(segment);
-                if (metadata && currentHintsHash && metadata.hintsHash && metadata.hintsHash !== currentHintsHash) {
+                if (metadata?.hintsHash && currentHintsHash && metadata.hintsHash !== currentHintsHash) {
                     hintsStale++;
+                    hintsStaleIndexes.push(segment.orderIndex);
                 }
             } else if (await doesFileExist(filePath)) {
                 stale++;
             } else {
                 missing++;
+                missingIndexes.push(segment.orderIndex);
             }
         }
 
-        return res.json({ total: chapter.segments.length, cached, stale, missing, hintsStale });
+        return res.json({
+            total: chapter.segments.length,
+            cached,
+            stale,
+            missing,
+            hintsStale,
+            /** Segments whose cached audio was generated with older prosody hints. */
+            hintsStaleIndexes,
+            /** Segments with no audio yet — the reader can warm exactly these. */
+            missingIndexes,
+            /** Speakable characters of this chapter, for cost metering. */
+            characters,
+        });
     } catch (error: any) {
         console.error('Error reading TTS status:', getSafeErrorMessage(error));
         return res.status(500).json({ error: error.message });
@@ -1191,6 +1275,106 @@ router.post('/books/:bookId/chapters/:chapterId/tts/regenerate', authenticateJWT
         return res.json({ scope: 'chapter', total: chapter.segments.length, preloaded, background: backgroundIndexes.length > 0 });
     } catch (error: any) {
         console.error('Error regenerating TTS:', getSafeErrorMessage(error));
+        return res.status(500).json({ error: error.message });
+    }
+});
+
+// Warm (pre-generate) a bounded set of upcoming segments so playback does not stall.
+// This reuses the normal generation path, which already skips cached segments and waits
+// on in-flight ones — so a warm request can never double-charge a segment that is
+// already being generated. Expensive providers are warmed in smaller batches.
+const TTS_WARM_MAX_SEGMENTS = 6;
+const TTS_WARM_MAX_SEGMENTS_EXPENSIVE = 2;
+
+function isExpensiveTtsVoice(voice: string): boolean {
+    return voice.startsWith('vbee-') || voice.startsWith('minimax-') || voice.startsWith('grok-');
+}
+
+router.post('/books/:bookId/chapters/:chapterId/tts/warm', authenticateJWT, async (req: AuthRequest, res: Response) => {
+    try {
+        const parsedBookId = parsePositiveInt(req.params.bookId);
+        const parsedChapterId = parsePositiveInt(req.params.chapterId);
+        if (!parsedBookId || !parsedChapterId) {
+            return res.status(400).json({ error: 'Book hoặc chapter ID không hợp lệ' });
+        }
+
+        const { voice } = req.body;
+        if (!isSupportedVoiceRequest(voice)) {
+            return res.status(400).json({ error: getVoiceValidationError(voice) || 'Giọng đọc không hợp lệ' });
+        }
+        if (hasInvalidOfflineTtsQuality(req.body.quality)) {
+            return res.status(400).json({ error: 'Chất lượng offline không hợp lệ' });
+        }
+        const quality = parseOfflineTtsQuality(req.body.quality);
+        const expressive = parseExpressiveFlag(req.body.expressive);
+
+        const chapter = await getChapterWithSegmentsForUser(parsedBookId, parsedChapterId, req.user.id);
+        if (!chapter) {
+            return res.status(404).json({ error: 'Chapter not found' });
+        }
+
+        const maxWarm = isExpensiveTtsVoice(voice) ? TTS_WARM_MAX_SEGMENTS_EXPENSIVE : TTS_WARM_MAX_SEGMENTS;
+
+        // Either an explicit list of segment indexes, or "the next ones after here"
+        // (fromSegmentIndex: -1 means "from the beginning of the chapter", used when the
+        // reader is about to move into the next chapter).
+        const requestedIndexes: number[] = [];
+        if (Array.isArray(req.body.segmentIndexes)) {
+            for (const raw of req.body.segmentIndexes.slice(0, 32)) {
+                const index = parseNonNegativeInt(raw);
+                if (index === null || index >= chapter.segments.length) continue;
+                if (!isSpeakableSegmentContent(chapter.segments[index].content)) continue;
+                if (!requestedIndexes.includes(index)) requestedIndexes.push(index);
+            }
+        } else {
+            const from = req.body.fromSegmentIndex === -1 ? -1 : parseNonNegativeInt(req.body.fromSegmentIndex);
+            if (from === null) {
+                return res.status(400).json({ error: 'fromSegmentIndex không hợp lệ' });
+            }
+            // getLookaheadSegmentIndexes already advances past the given index, so pass `from`
+            // itself: from=0 → 1,2,… and from=-1 → 0,1,… (start of chapter).
+            const lookahead = getLookaheadSegmentIndexes(from, chapter.segments.length, maxWarm * 3);
+            for (const index of lookahead) {
+                if (!isSpeakableSegmentContent(chapter.segments[index].content)) continue;
+                requestedIndexes.push(index);
+                if (requestedIndexes.length >= maxWarm) break;
+            }
+        }
+
+        const indexes = requestedIndexes.slice(0, maxWarm);
+        const cached: number[] = [];
+        const queued: number[] = [];
+        for (const index of indexes) {
+            const isCached = await isSegmentCachedForVoice(parsedBookId, parsedChapterId, voice, chapter.segments[index], quality, expressive);
+            if (isCached) cached.push(index);
+            else queued.push(index);
+        }
+
+        if (queued.length > 0) {
+            const expensive = isExpensiveTtsVoice(voice);
+            generateSegmentsInBackground(
+                parsedBookId,
+                parsedChapterId,
+                voice,
+                queued,
+                expensive ? 1 : 4,
+                expensive ? 400 : 0,
+                quality,
+                expressive
+            );
+        }
+
+        return res.json({
+            chapterId: parsedChapterId,
+            voice,
+            maxWarm,
+            /** Segment indexes this request actually considered (after bounds/speakable filtering). */
+            requested: indexes,
+            cached,
+            queued,
+        });
+    } catch (error: any) {
+        console.error('Error warming TTS:', getSafeErrorMessage(error));
         return res.status(500).json({ error: error.message });
     }
 });

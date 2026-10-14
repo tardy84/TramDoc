@@ -16,6 +16,7 @@
     "smoke:epub-prosody": "tsx scripts/smoke-epub-prosody.ts",
     "smoke:tts-book-job": "tsx scripts/smoke-tts-book-job.ts",
     "smoke:tts-marks": "tsx scripts/smoke-tts-marks.ts",
+    "smoke:tts-cost": "tsx scripts/smoke-tts-cost.ts",
     "smoke:minimax": "tsx scripts/smoke-minimax-voices.ts",
     "smoke:grok-voices": "tsx scripts/smoke-grok-voices.ts"
   },

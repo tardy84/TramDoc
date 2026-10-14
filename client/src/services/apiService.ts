@@ -162,6 +162,25 @@ export interface TtsBookCacheChapterStatus {
     stale: number;
     missing: number;
     skipped: number;
+    characters?: number;
+    missingCharacters?: number;
+    /** Cached audio generated with older prosody hints (tone/pace/pitch). */
+    hintsStale?: number;
+    hintsStaleIndexes?: number[];
+}
+
+/** What a full-book generation would cost, in the units we can actually measure. */
+export interface TtsCostEstimate {
+    /** Speakable characters still needing audio. */
+    characters: number;
+    estimatedSeconds: number | null;
+    /** Null when the provider has no published per-character rate. */
+    ratePerMillionChars: number | null;
+    /** Null when the provider has no published per-character rate. */
+    estimatedCostUsd: number | null;
+    /** True when the audio length came from this voice's already-measured audio. */
+    secondsFromMeasuredAudio: boolean;
+    rateSource: string | null;
 }
 
 export interface TtsBookCacheStatus {
@@ -170,7 +189,24 @@ export interface TtsBookCacheStatus {
     stale: number;
     missing: number;
     skipped: number;
+    characters?: number;
+    missingCharacters?: number;
+    /** Cached segments whose audio was generated with older prosody hints. */
+    hintsStale?: number;
+    estimate?: TtsCostEstimate;
     chapters: TtsBookCacheChapterStatus[];
+}
+
+/** Per-chapter cache health for the current voice (drives the stale-hints notice). */
+export interface TtsChapterCacheStatus {
+    total: number;
+    cached: number;
+    stale: number;
+    missing: number;
+    hintsStale: number;
+    hintsStaleIndexes: number[];
+    missingIndexes: number[];
+    characters: number;
 }
 
 export interface TtsSegmentMarks {
@@ -206,6 +242,65 @@ export const getChapterTtsMarks = async (
         params: { voice, quality: options.quality, expressive: options.expressive ? 1 : undefined },
     });
     return response.data?.segments ?? [];
+};
+
+/**
+ * Ask the server to pre-generate upcoming segments so playback does not stall.
+ * Bounded server-side (2 segments for Vbee/MiniMax/Grok, 6 otherwise) and cache-aware,
+ * so calling this is safe to repeat. Fire-and-forget: never blocks playback.
+ */
+export const warmChapterTts = async (
+    bookId: number,
+    chapterId: number,
+    voice: string,
+    options: {
+        fromSegmentIndex?: number;
+        segmentIndexes?: number[];
+        quality?: OfflineTtsQuality;
+        expressive?: boolean;
+    } = {}
+): Promise<{ cached: number[]; queued: number[] }> => {
+    const response = await api.post(
+        `/books/${bookId}/chapters/${chapterId}/tts/warm`,
+        {
+            voice,
+            fromSegmentIndex: options.fromSegmentIndex,
+            segmentIndexes: options.segmentIndexes,
+            quality: options.quality,
+            expressive: options.expressive,
+        },
+        { timeout: 15000 }
+    );
+    return { cached: response.data?.cached ?? [], queued: response.data?.queued ?? [] };
+};
+
+/** Cache health of one chapter for a voice, including which segments need regenerating. */
+export const getChapterTtsStatus = async (
+    bookId: number,
+    chapterId: number,
+    voice: string,
+    options: { expressive?: boolean } = {}
+): Promise<TtsChapterCacheStatus> => {
+    const response = await api.get(`/books/${bookId}/chapters/${chapterId}/tts/status`, {
+        params: { voice, expressive: options.expressive ? 1 : undefined },
+    });
+    return response.data;
+};
+
+/** Regenerate one segment's audio (used when its cached audio predates new prosody hints). */
+export const regenerateSegmentTts = async (
+    bookId: number,
+    chapterId: number,
+    voice: string,
+    segmentIndex: number,
+    options: { expressive?: boolean } = {}
+): Promise<{ generated: boolean }> => {
+    const response = await api.post(
+        `/books/${bookId}/chapters/${chapterId}/tts/regenerate`,
+        { voice, segmentIndex, expressive: options.expressive },
+        { timeout: 120000 }
+    );
+    return { generated: Boolean(response.data?.generated) };
 };
 
 export const startBookTtsJob = async (
@@ -252,5 +347,8 @@ export default {
     getBookTtsJob,
     cancelBookTtsJob,
     getBookTtsStatus,
-    getChapterTtsMarks
+    getChapterTtsMarks,
+    getChapterTtsStatus,
+    warmChapterTts,
+    regenerateSegmentTts
 };
