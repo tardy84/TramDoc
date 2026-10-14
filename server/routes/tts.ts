@@ -1056,6 +1056,8 @@ router.get('/books/:bookId/chapters/:chapterId/tts/marks', authenticateJWT, asyn
             status: 'ready' | 'missing' | 'unknown';
             source: string | null;
             durationMs: number | null;
+            /** Audio file backing these marks (also the offline cache key). */
+            audioFile: string;
             marks: SegmentMarks | null;
         }> = [];
 
@@ -1077,6 +1079,7 @@ router.get('/books/:bookId/chapters/:chapterId/tts/marks', authenticateJWT, asyn
                     status: 'missing',
                     source: null,
                     durationMs: null,
+                    audioFile: fileName,
                     marks: null,
                 });
                 continue;
@@ -1098,6 +1101,7 @@ router.get('/books/:bookId/chapters/:chapterId/tts/marks', authenticateJWT, asyn
                 status: marks ? 'ready' : 'unknown',
                 source,
                 durationMs,
+                audioFile: fileName,
                 marks,
             });
         }
