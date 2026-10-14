@@ -9,7 +9,6 @@ interface ReaderControlsProps {
     generating: boolean;
     audioError?: string | null;
     audioFiles: string[];
-    expressiveTts: boolean;
     playbackSpeed: number;
     currentChapterIndex: number;
     chapters: Chapter[];
@@ -33,7 +32,6 @@ const ReaderControls: React.FC<ReaderControlsProps> = ({
     generating,
     audioError,
     audioFiles,
-    expressiveTts,
     playbackSpeed,
     currentChapterIndex,
     chapters,
@@ -61,13 +59,6 @@ const ReaderControls: React.FC<ReaderControlsProps> = ({
                         <div className="mb-4 flex items-center justify-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-emerald-300">
                             <div className="h-4 w-4 rounded-full border-2 border-emerald-300/40 border-t-emerald-300 animate-spin" />
                             <span>Đang tạo giọng đọc</span>
-                        </div>
-                    )}
-                    {expressiveTts && (
-                        <div className="mb-3 flex items-center justify-center">
-                            <span className="rounded-full border border-cyan-300/30 bg-cyan-400/15 px-3 py-1 text-[10px] font-black uppercase tracking-[0.18em] text-cyan-100">
-                                EXP · Đọc diễn cảm
-                            </span>
                         </div>
                     )}
                     <div className="flex items-center justify-between gap-1 sm:gap-2">

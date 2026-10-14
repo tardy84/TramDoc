@@ -2,9 +2,6 @@ import axios from 'axios';
 import { API_BASE_URL, OfflineTtsQuality } from '../constants';
 import { Book, Bookmark } from '../types';
 
-const BYPASS_AUTH = import.meta.env.VITE_BYPASS_AUTH === '1';
-const LOCAL_AUTH_TOKEN = 'local-auth-bypass';
-
 // Centralised API base. Browser dev falls back to the Vite proxy at the current origin;
 // Capacitor/iOS release builds must set VITE_API_URL to the public HTTPS API origin.
 const api = axios.create({
@@ -13,7 +10,7 @@ const api = axios.create({
 
 // Request Interceptor: Attach JWT Token if available
 api.interceptors.request.use(config => {
-    const token = BYPASS_AUTH ? LOCAL_AUTH_TOKEN : localStorage.getItem('token');
+    const token = localStorage.getItem('token');
     if (token) {
         config.headers.Authorization = `Bearer ${token}`;
     }
@@ -23,7 +20,7 @@ api.interceptors.request.use(config => {
 api.interceptors.response.use(
     response => response,
     error => {
-        if (!BYPASS_AUTH && axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403) && localStorage.getItem('token')) {
+        if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403) && localStorage.getItem('token')) {
             localStorage.removeItem('token');
             localStorage.removeItem('audiobook_token');
             localStorage.removeItem('user');
@@ -116,12 +113,11 @@ export const generateTTS = async (
     voice: string,
     startSegmentIndex?: number,
     quality?: OfflineTtsQuality,
-    signal?: AbortSignal,
-    expressive = false
+    signal?: AbortSignal
 ): Promise<{ audioFiles: string[] }> => {
     const response = await api.post(
         `/books/${bookId}/chapters/${chapterId}/tts`,
-        { voice, startSegmentIndex, quality, expressive },
+        { voice, startSegmentIndex, quality },
         { signal, timeout: 60000 }
     );
     return response.data;
@@ -137,7 +133,6 @@ export interface TtsBookJobProgress {
     voice: string;
     mode: 'missing' | 'force';
     quality?: OfflineTtsQuality;
-    expressive?: boolean;
     status: TtsBookJobStatus;
     totalSegments: number;
     cachedSegments: number;
@@ -178,10 +173,9 @@ export const startBookTtsJob = async (
     voice: string,
     mode: 'missing' | 'force' = 'missing',
     confirmExpensiveProvider = false,
-    quality?: OfflineTtsQuality,
-    expressive = false
+    quality?: OfflineTtsQuality
 ): Promise<TtsBookJobProgress> => {
-    const response = await api.post(`/books/${bookId}/tts/jobs`, { voice, mode, confirmExpensiveProvider, quality, expressive });
+    const response = await api.post(`/books/${bookId}/tts/jobs`, { voice, mode, confirmExpensiveProvider, quality });
     return response.data;
 };
 

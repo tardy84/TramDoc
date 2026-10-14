@@ -124,119 +124,6 @@ const normalizeAudioBlob = (blob: Blob) => {
     return new Blob([blob], { type: 'audio/mpeg' });
 };
 
-const OFFLINE_DOWNLOAD_RETRY_DELAYS_MS = [1500, 3000, 6000, 10000, 15000, 20000];
-const OFFLINE_TTS_REQUEST_RETRY_DELAYS_MS = [3000, 6000, 10000];
-
-const getDownloadErrorMessage = (error: unknown) => {
-    if (axios.isAxiosError(error)) {
-        const status = error.response?.status;
-        const statusText = error.response?.statusText;
-        if (status) return `HTTP ${status}${statusText ? ` ${statusText}` : ''}`;
-        return error.message;
-    }
-
-    return error instanceof Error ? error.message : String(error);
-};
-
-const isRetryableDownloadError = (error: unknown) => {
-    if (axios.isAxiosError(error)) {
-        if (error.code === 'ERR_CANCELED') return false;
-        const status = error.response?.status;
-        if (!status) return true;
-        return status === 408 ||
-            status === 409 ||
-            status === 425 ||
-            status === 429 ||
-            status >= 500;
-    }
-
-    return true;
-};
-
-const sleepWithAbort = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve, reject) => {
-    if (signal?.aborted) {
-        reject(new Error('Offline audio download cancelled'));
-        return;
-    }
-
-    const timeout = setTimeout(() => {
-        signal?.removeEventListener('abort', onAbort);
-        resolve();
-    }, ms);
-
-    function onAbort() {
-        clearTimeout(timeout);
-        reject(new Error('Offline audio download cancelled'));
-    }
-
-    signal?.addEventListener('abort', onAbort, { once: true });
-});
-
-const downloadAudioBlobWithRetry = async (fileUrl: string, segmentIndex: number, signal?: AbortSignal) => {
-    let lastError: unknown;
-
-    for (let attempt = 0; attempt <= OFFLINE_DOWNLOAD_RETRY_DELAYS_MS.length; attempt++) {
-        try {
-            const res = await axios.get(resolveApiUrl(fileUrl), { responseType: 'blob', signal });
-            if (!await isLikelyPlayableAudioBlob(res.data)) {
-                throw new Error(`Invalid audio response (${res.data.type || 'unknown'}, ${res.data.size} bytes)`);
-            }
-            return normalizeAudioBlob(res.data);
-        } catch (error) {
-            if (signal?.aborted) throw error;
-            lastError = error;
-
-            const shouldRetry = attempt < OFFLINE_DOWNLOAD_RETRY_DELAYS_MS.length &&
-                isRetryableDownloadError(error);
-            if (!shouldRetry) throw error;
-
-            const delayMs = OFFLINE_DOWNLOAD_RETRY_DELAYS_MS[attempt];
-            console.warn(
-                `[Offline] Segment ${segmentIndex} audio chưa sẵn sàng (${getDownloadErrorMessage(error)}). ` +
-                `Thử lại sau ${Math.round(delayMs / 1000)}s.`
-            );
-            await sleepWithAbort(delayMs, signal);
-        }
-    }
-
-    throw lastError instanceof Error ? lastError : new Error('Audio download failed');
-};
-
-const generateChapterAudioFilesWithRetry = async (
-    bookId: number,
-    chapterId: number,
-    voice: string,
-    quality: OfflineTtsQuality,
-    signal?: AbortSignal
-) => {
-    let lastError: unknown;
-
-    for (let attempt = 0; attempt <= OFFLINE_TTS_REQUEST_RETRY_DELAYS_MS.length; attempt++) {
-        try {
-            return await generateTTS(bookId, chapterId, voice, 0, quality, signal);
-        } catch (error) {
-            if (signal?.aborted) throw error;
-            lastError = error;
-
-            // Vbee can bill on submit, so do not auto-resubmit a failed chapter
-            // bootstrap request. Segment downloads still retry signed /audio URLs.
-            const shouldRetry = !voice.startsWith('vbee-') &&
-                attempt < OFFLINE_TTS_REQUEST_RETRY_DELAYS_MS.length &&
-                isRetryableDownloadError(error);
-            if (!shouldRetry) throw error;
-
-            const delayMs = OFFLINE_TTS_REQUEST_RETRY_DELAYS_MS[attempt];
-            console.warn(
-                `[Offline] TTS bootstrap chưa sẵn sàng (${getDownloadErrorMessage(error)}). ` +
-                `Thử lại sau ${Math.round(delayMs / 1000)}s.`
-            );
-            await sleepWithAbort(delayMs, signal);
-        }
-    }
-
-    throw lastError instanceof Error ? lastError : new Error('TTS bootstrap failed');
-};
-
 const getChapterAudioRecords = async (
     db: IDBPDatabase<OfflineBook>,
     bookId: number,
@@ -311,6 +198,31 @@ const reconcileChapterOfflineStatus = async (
 
     return status;
 };
+
+const canBrowserLoadAudioBlob = (blob: Blob, timeoutMs = 5000) => new Promise<boolean>(resolve => {
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio();
+    let settled = false;
+
+    const cleanup = (result: boolean) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        audio.pause();
+        audio.removeAttribute('src');
+        audio.load();
+        URL.revokeObjectURL(url);
+        resolve(result);
+    };
+
+    const timeout = setTimeout(() => cleanup(false), timeoutMs);
+    audio.preload = 'metadata';
+    audio.onloadedmetadata = () => cleanup(true);
+    audio.oncanplay = () => cleanup(true);
+    audio.onerror = () => cleanup(false);
+    audio.src = url;
+    audio.load();
+});
 
 export const saveBookOffline = async (book: Book) => {
     const db = await initDB();
@@ -407,7 +319,14 @@ export const saveChapterAudio = async (
                 return true;
             }
 
-            const audioBlob = await downloadAudioBlobWithRetry(fileUrl, i, signal);
+            const res = await axios.get(resolveApiUrl(fileUrl), { responseType: 'blob', signal });
+            if (!await isLikelyPlayableAudioBlob(res.data)) {
+                throw new Error(`Invalid audio response (${res.data.type || 'unknown'}, ${res.data.size} bytes)`);
+            }
+            const audioBlob = normalizeAudioBlob(res.data);
+            if (!await canBrowserLoadAudioBlob(audioBlob)) {
+                throw new Error(`Browser cannot load downloaded audio (${audioBlob.type || 'unknown'}, ${audioBlob.size} bytes)`);
+            }
             await db.put('audio', {
                 key, // Matches keyPath
                 bookId,
@@ -464,7 +383,7 @@ export const downloadChapterAudioOffline = async (
     onProgress?: (completed: number, total: number) => void,
     signal?: AbortSignal
 ) => {
-    const { audioFiles } = await generateChapterAudioFilesWithRetry(bookId, chapterId, voice, quality, signal);
+    const { audioFiles } = await generateTTS(bookId, chapterId, voice, 0, quality, signal);
     return saveChapterAudio(bookId, chapterId, voice, quality, audioFiles, onProgress, signal);
 };
 

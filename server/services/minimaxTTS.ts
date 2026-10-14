@@ -2,6 +2,7 @@ import axios from 'axios';
 
 const MINIMAX_API_KEY = process.env.MINIMAX_API_KEY;
 const MINIMAX_API_URL = 'https://api.minimax.io/v1/t2a_v2';
+const MINIMAX_TTS_MODEL = process.env.MINIMAX_TTS_MODEL || 'speech-2.8-turbo';
 
 export class MiniMaxTTSService {
     private defaultVoice = 'male-qn-qingse';
@@ -21,7 +22,7 @@ export class MiniMaxTTSService {
             const response = await axios.post(
                 MINIMAX_API_URL,
                 {
-                    model: 'speech-2.8-hd',
+                    model: MINIMAX_TTS_MODEL,
                     text: text,
                     stream: false,
                     voice_setting: {

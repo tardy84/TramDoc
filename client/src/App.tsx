@@ -210,17 +210,15 @@ function MainApp({
                             </svg>
                         </button>
 
-                        {!BYPASS_AUTH && (
-                            <button
-                                onClick={onLogout}
-                                className="p-2 md:p-3 bg-red-500/10 hover:bg-red-500/20 text-red-500 hover:text-red-400 rounded-xl transition-all border border-red-500/20 active:scale-95 md:ml-2"
-                                title="Đăng xuất"
-                            >
-                                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 md:h-6 md:w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 17l5-5m0 0l-5-5m5 5H9m5 4v1a3 3 0 01-3 3H5a3 3 0 01-3-3V6a3 3 0 013-3h6a3 3 0 013 3v1" />
-                                </svg>
-                            </button>
-                        )}
+                        <button
+                            onClick={onLogout}
+                            className="p-2 md:p-3 bg-red-500/10 hover:bg-red-500/20 text-red-500 hover:text-red-400 rounded-xl transition-all border border-red-500/20 active:scale-95 md:ml-2"
+                            title="Đăng xuất"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 md:h-6 md:w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 17l5-5m0 0l-5-5m5 5H9m5 4v1a3 3 0 01-3 3H5a3 3 0 01-3-3V6a3 3 0 013-3h6a3 3 0 013 3v1" />
+                            </svg>
+                        </button>
 
                         <label className="group relative cursor-pointer ml-1">
                             <input type="file" accept=".epub" onChange={handleFileUpload} disabled={uploading} className="hidden" />
@@ -416,7 +414,7 @@ function MainApp({
 
 
 function App() {
-    const [token, setToken] = useState<string | null>(() => BYPASS_AUTH ? LOCAL_AUTH_TOKEN : localStorage.getItem('token'));
+    const [token, setToken] = useState<string | null>(() => localStorage.getItem('token') || (BYPASS_AUTH ? LOCAL_AUTH_TOKEN : null));
     const [books, setBooks] = useState<Book[]>([]);
     const [loading, setLoading] = useState(true);
     const [loadError, setLoadError] = useState<string | null>(null);

@@ -34,6 +34,8 @@ export function hasApiKeys(voice: string): boolean {
 
 // ===== Voice Config =====
 
+const MINIMAX_TTS_MODEL = import.meta.env.VITE_MINIMAX_TTS_MODEL || 'speech-2.8-turbo';
+
 const googleVoiceMap: Record<string, { languageCode: string; name: string; ssmlGender: string; pitch: number; speakingRate: number }> = {
     'vi-VN-Wavenet-A': { languageCode: 'vi-VN', name: 'vi-VN-Wavenet-A', ssmlGender: 'FEMALE', pitch: 1.0, speakingRate: 1.05 },
     'vi-VN-Wavenet-B': { languageCode: 'vi-VN', name: 'vi-VN-Wavenet-B', ssmlGender: 'MALE', pitch: 0, speakingRate: 1.0 },
@@ -163,7 +165,7 @@ async function synthesizeMinimax(text: string, voice: string, signal?: AbortSign
             'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-            model: 'speech-2.8-hd',
+            model: MINIMAX_TTS_MODEL,
             text: text,
             stream: false,
             voice_setting: {

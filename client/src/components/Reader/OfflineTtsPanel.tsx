@@ -70,6 +70,7 @@ export default function OfflineTtsPanel({ book, selectedVoice, setSelectedVoice 
     const [offlineUsageBytes, setOfflineUsageBytes] = useState(0);
     const cancelRequestedRef = useRef(false);
     const downloadAbortRef = useRef<AbortController | null>(null);
+    const latestJobRef = useRef<TtsBookJobProgress | null>(null);
 
     const isBusy = phase === 'generating' || phase === 'downloading';
     const isExpensiveProvider = isExpensiveTtsVoice(selectedVoice);
@@ -145,8 +146,23 @@ export default function OfflineTtsPanel({ book, selectedVoice, setSelectedVoice 
     }, [book.id, selectedVoice, effectiveQuality]);
 
     const updateJobState = (nextJob: TtsBookJobProgress | null) => {
+        latestJobRef.current = nextJob;
         setJob(nextJob);
     };
+
+    useEffect(() => {
+        return () => {
+            cancelRequestedRef.current = true;
+            downloadAbortRef.current?.abort();
+
+            const latestJob = latestJobRef.current;
+            if (latestJob && (latestJob.status === 'queued' || latestJob.status === 'running')) {
+                cancelBookTtsJob(book.id, latestJob.jobId).catch(err => {
+                    console.error('[Offline TTS] Cancel on unmount failed:', err);
+                });
+            }
+        };
+    }, [book.id]);
 
     const pollUntilDone = async (bookId: number, jobId: string) => {
         while (!cancelRequestedRef.current) {

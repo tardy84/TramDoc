@@ -25,6 +25,7 @@ import path from 'path';
 
 const MINIMAX_API_KEY = process.env.MINIMAX_API_KEY;
 const MINIMAX_API_URL = 'https://api.minimax.io/v1/t2a_v2';
+const MINIMAX_TTS_MODEL = process.env.MINIMAX_TTS_MODEL || 'speech-2.8-turbo';
 
 interface VoiceSample {
     rawVoiceId: string;
@@ -63,7 +64,7 @@ async function synthesizeOne(sample: VoiceSample): Promise<{ bytes: number; samp
     const response = await axios.post(
         MINIMAX_API_URL,
         {
-            model: 'speech-2.8-hd',
+            model: MINIMAX_TTS_MODEL,
             text: sample.text,
             stream: false,
             voice_setting: {
@@ -121,7 +122,7 @@ async function main(): Promise<void> {
         return;
     }
 
-    console.log(`[MiniMax Smoke] Generating ${SAMPLES.length} voice samples...`);
+    console.log(`[MiniMax Smoke] Generating ${SAMPLES.length} voice samples with ${MINIMAX_TTS_MODEL}...`);
     let allOk = true;
 
     for (const sample of SAMPLES) {
