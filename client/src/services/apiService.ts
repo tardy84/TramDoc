@@ -188,6 +188,8 @@ export interface TtsChapterMarksEntry {
     status: 'ready' | 'missing' | 'unknown';
     source: string | null;
     durationMs: number | null;
+    /** Audio file backing these marks (also the offline cache key). */
+    audioFile?: string;
     marks: TtsSegmentMarks | null;
 }
 

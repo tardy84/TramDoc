@@ -64,6 +64,22 @@ cd client && npm run build
 Expected: smoke prints all checks passed (sentence offsets slice back exactly, duration probe ≈2.5s,
 timeline monotonic and ending at duration, timepoints → exact marks, subtitle payload shapes parse).
 
+## Verified on 2026-10-14
+
+- `server npx tsc --noEmit` → clean; `client npm run build` → built (503 KB bundle, pre-existing size warning).
+- `npm run smoke:tts-marks` → **all checks passed** (6 sentences from the sample text, offsets slice back to
+  232/232 chars, ffprobe 2500 ms, MP3 frame walker 2560 ms, timeline monotonic 0→2500 ms, timepoints →
+  exact marks at 0/700 ms, subtitle payloads in 3 shapes parse).
+- Live server against a scratch SQLite fixture (`TRAMDOC_BYPASS_AUTH=1`, temp DB, no provider calls):
+  - `GET /api/books/1/chapters/1/tts/marks?voice=vbee-…` → 200, two segments `status: missing` with the
+    resolved `audioFile` names, `timingCapable: false` for vbee (correct — estimated path).
+  - after placing real 8 s / 3 s MP3s at those names → `status: ready`, `source: estimated`,
+    `durationMs 8000 / 3000`, `4 / 3` sentences, monotonic char ranges covering 0→159 chars,
+    and the sidecar JSON persisted `marks`, `marksSource`, `durationMs` next to each audio file.
+  - route is auth-protected: 401 without a token, 403 with a bad token.
+- Not verified: the google timepoints / minimax subtitle paths need live provider keys (no API calls were
+  made, so no credits were spent).
+
 ## Next (not in this slice)
 
 1. Word-level highlight using provider `words` (minimax subtitle already parsed into the payload).
