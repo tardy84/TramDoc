@@ -12,13 +12,28 @@ interface VoiceConfig {
     speakingRate?: number;
 }
 
-export class GoogleTTSService {
-    private voiceMap: Record<string, VoiceConfig> = {
-        'vi-VN-Wavenet-A': { languageCode: 'vi-VN', name: 'vi-VN-Wavenet-A', ssmlGender: 'FEMALE', pitch: 1.0, speakingRate: 1.05 }, // Mai Chi - Trẻ trung, rành mạch
-        'vi-VN-Wavenet-B': { languageCode: 'vi-VN', name: 'vi-VN-Wavenet-B', ssmlGender: 'MALE', pitch: 0, speakingRate: 1.0 },    // Anh Quân - Tiêu chuẩn, tin cậy
-    };
+/** Voice options for the two mapped Google voices (also used by the timing path). */
+export const GOOGLE_VOICE_MAP: Record<string, VoiceConfig> = {
+    'vi-VN-Wavenet-A': { languageCode: 'vi-VN', name: 'vi-VN-Wavenet-A', ssmlGender: 'FEMALE', pitch: 1.0, speakingRate: 1.05 }, // Mai Chi - Trẻ trung, rành mạch
+    'vi-VN-Wavenet-B': { languageCode: 'vi-VN', name: 'vi-VN-Wavenet-B', ssmlGender: 'MALE', pitch: 0, speakingRate: 1.0 },    // Anh Quân - Tiêu chuẩn, tin cậy
+};
 
-    private defaultVoice = 'vi-VN-Wavenet-B';
+export const GOOGLE_DEFAULT_VOICE = 'vi-VN-Wavenet-B';
+export const GOOGLE_TTS_API_URL = 'https://texttospeech.googleapis.com/v1/text:synthesize';
+
+/** Resolve the Google voice for a role/override request (shared by audio + timing paths). */
+export function resolveGoogleVoice(role: 'narrator' | 'male' | 'female', voiceOverride?: string): VoiceConfig {
+    const voiceName = voiceOverride || (role === 'narrator' ? GOOGLE_DEFAULT_VOICE : null);
+    return GOOGLE_VOICE_MAP[voiceName || ''] ||
+        (role === 'male' ? GOOGLE_VOICE_MAP['vi-VN-Wavenet-B'] :
+            role === 'female' ? GOOGLE_VOICE_MAP['vi-VN-Wavenet-A'] :
+                GOOGLE_VOICE_MAP[GOOGLE_DEFAULT_VOICE]);
+}
+
+export class GoogleTTSService {
+    private voiceMap: Record<string, VoiceConfig> = GOOGLE_VOICE_MAP;
+
+    private defaultVoice = GOOGLE_DEFAULT_VOICE;
 
     /** Resolve Google TTS API key from runtime env (supports GOOGLE_TTS_API_KEY and GOOGLE_CLOUD_API_KEY) */
     private getApiKey(): string | undefined {
