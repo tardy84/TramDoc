@@ -217,45 +217,51 @@ export default function BookReader({ bookId, onClose }: BookReaderProps) {
         getAudio: getGlobalAudio,
     });
 
-    const seekToSentence = useCallback((marks: SentenceMarks, sentenceIndex: number) => {
+    const seekToOffset = useCallback((startMs: number) => {
         const element = getGlobalAudio();
-        const target = marks.sentences[sentenceIndex];
-        if (!element || !target) return;
+        if (!element) return;
         try {
-            element.currentTime = Math.max(0, target.startMs / 1000);
+            element.currentTime = Math.max(0, startMs / 1000);
         } catch {
             // Ignore seek errors on not-yet-loaded audio.
         }
     }, []);
 
-    /** Render a segment's text split by sentence marks so the spoken sentence can be highlighted. */
+    /** Render a segment's text split by its timing marks so the spoken unit is highlighted.
+     *  Uses word-level marks when the provider returned real word timings (google/minimax),
+     *  otherwise falls back to the sentence timeline. */
     const renderSegmentContent = (segment: Segment, index: number) => {
         const marks = sentenceMarks.get(index);
         if (!marks || !marks.sentences.length || index !== currentSegmentIndex) {
             return segment.content;
         }
 
+        const words = marks.words && marks.words.length ? marks.words : null;
+        const units: Array<{ charStart: number; charEnd: number; startMs: number }> = words ?? marks.sentences;
+        const activeUnit = words ? highlight.wordIndex : highlight.sentenceIndex;
+        const unitKind = words ? 'word' : 'sentence';
+
         const nodes: ReactNode[] = [];
         let cursor = 0;
-        marks.sentences.forEach((sentence, sentenceIndex) => {
-            if (sentence.charStart > cursor) {
-                nodes.push(<span key={`gap-${sentenceIndex}`}>{segment.content.slice(cursor, sentence.charStart)}</span>);
+        units.forEach((unit, unitIndex) => {
+            if (unit.charStart > cursor) {
+                nodes.push(<span key={`gap-${unitIndex}`}>{segment.content.slice(cursor, unit.charStart)}</span>);
             }
-            const isActive = highlight.segmentIndex === index && highlight.sentenceIndex === sentenceIndex;
+            const isActive = highlight.segmentIndex === index && activeUnit === unitIndex;
             nodes.push(
                 <span
-                    key={`sentence-${sentenceIndex}`}
+                    key={`${unitKind}-${unitIndex}`}
                     onClick={(event) => {
                         event.stopPropagation();
-                        seekToSentence(marks, sentenceIndex);
+                        seekToOffset(unit.startMs);
                     }}
                     title={marks.source === 'estimated' ? 'Mốc thời gian ước lượng' : undefined}
-                    className={`rounded-md transition-colors duration-200 ${isActive ? `${currentThemeStyles.sentenceActive ?? 'bg-white/20'} shadow-sm` : ''}`}
+                    className={`rounded-md transition-colors duration-200 ${isActive ? `${currentThemeStyles.sentenceActive ?? 'bg-white/20'} ${unitKind === 'word' ? 'shadow-sm' : 'shadow-sm'}` : ''}`}
                 >
-                    {segment.content.slice(sentence.charStart, sentence.charEnd)}
+                    {segment.content.slice(unit.charStart, unit.charEnd)}
                 </span>
             );
-            cursor = Math.max(cursor, sentence.charEnd);
+            cursor = Math.max(cursor, unit.charEnd);
         });
         if (cursor < segment.content.length) {
             nodes.push(<span key="tail">{segment.content.slice(cursor)}</span>);

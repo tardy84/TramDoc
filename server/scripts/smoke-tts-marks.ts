@@ -106,6 +106,19 @@ async function main() {
     check('CSV-ish lines parse', Array.isArray(csv) && csv.length === 2, `${csv?.length} entries`);
     const fromWords = marksFromSubtitleEntries(SAMPLE, (wrapped ?? []) as Array<Record<string, unknown>>, 2500);
     check('word entries map onto sentence marks', isUsableMarks(fromWords));
+    check('word marks are monotonic and kept in the payload', (() => {
+        const words = fromWords?.words;
+        if (!words || !words.length) return false;
+        let last = -1;
+        for (const w of words) {
+            if (w.startMs < last || w.endMs < w.startMs) return false;
+            last = w.startMs;
+        }
+        return true;
+    })(), `${fromWords?.words?.length ?? 0} words`);
+    const wordsCsv = marksFromSubtitleEntries(SAMPLE, (csv ?? []) as Array<Record<string, unknown>>, 2500);
+    check('word offsets stay inside the segment text', (wordsCsv?.words ?? []).every(w =>
+        w.charStart >= 0 && w.charEnd <= SAMPLE.length));
 
     await fs.rm(path.dirname(mp3), { recursive: true, force: true });
 

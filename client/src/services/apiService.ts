@@ -178,6 +178,8 @@ export interface TtsSegmentMarks {
     source: 'provider-timepoints' | 'provider-subtitle' | 'estimated';
     durationMs: number;
     sentences: Array<{ text: string; charStart: number; charEnd: number; startMs: number; endMs: number }>;
+    /** Real word timings when the provider returned them (google/minimax only). */
+    words?: Array<{ text: string; charStart: number; charEnd: number; startMs: number; endMs: number }>;
 }
 
 export interface TtsChapterMarksEntry {

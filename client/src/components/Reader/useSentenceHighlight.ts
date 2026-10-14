@@ -18,16 +18,28 @@ export interface SentenceMark {
     endMs: number;
 }
 
+export interface WordMark {
+    text: string;
+    charStart: number;
+    charEnd: number;
+    startMs: number;
+    endMs: number;
+}
+
 export interface SegmentMarks {
     version: number;
     source: 'provider-timepoints' | 'provider-subtitle' | 'estimated' | string;
     durationMs: number;
     sentences: SentenceMark[];
+    /** Present only when the provider returned real word timings (exact sources). */
+    words?: WordMark[];
 }
 
 export interface HighlightState {
     segmentIndex: number;
     sentenceIndex: number;
+    /** -1 unless exact word timings are available for this segment. */
+    wordIndex: number;
     /** Position inside the current sentence, 0..1 (used for a soft progress hint). */
     sentenceProgress: number;
 }
@@ -41,7 +53,7 @@ interface UseSentenceHighlightOptions {
     getAudio: () => HTMLAudioElement | null;
 }
 
-const IDLE: HighlightState = { segmentIndex: -1, sentenceIndex: -1, sentenceProgress: 0 };
+const IDLE: HighlightState = { segmentIndex: -1, sentenceIndex: -1, wordIndex: -1, sentenceProgress: 0 };
 
 function findSentence(sentences: SentenceMark[], positionMs: number): { index: number; progress: number } {
     if (!sentences.length) return { index: -1, progress: 0 };
@@ -57,6 +69,20 @@ function findSentence(sentences: SentenceMark[], positionMs: number): { index: n
     }
     const last = sentences.length - 1;
     return { index: last, progress: 1 };
+}
+
+function findWord(words: WordMark[], positionMs: number): number {
+    if (!words.length) return -1;
+    for (let i = 0; i < words.length; i++) {
+        const word = words[i];
+        if (positionMs < word.endMs) {
+            // Inside a natural pause the highlight should stay on the previous word
+            // instead of jumping ahead to the next one.
+            if (positionMs >= word.startMs) return i;
+            return Math.max(0, i - 1);
+        }
+    }
+    return words.length - 1;
 }
 
 export function useSentenceHighlight({
@@ -77,42 +103,42 @@ export function useSentenceHighlight({
             }
         };
 
-        const tick = () => {
-            rafRef.current = requestAnimationFrame(tick);
+        const compute = (): HighlightState | null => {
             const audio = getAudio();
             const marks = marksBySegment.get(activeSegmentIndex);
-            if (!audio || !marks || !marks.sentences.length) {
-                if (lastSentenceRef.current !== '') {
-                    lastSentenceRef.current = '';
-                    setState(IDLE);
-                }
-                return;
-            }
+            if (!audio || !marks || !marks.sentences.length) return null;
 
-            // Sentence timings are always expressed inside the current segment's own
-            // audio file, so playbackRate never has to be applied here.
+            // Timings always refer to the current segment's own audio file, so
+            // playbackRate never has to be applied here.
             const positionMs = audio.currentTime * 1000;
             const { index, progress } = findSentence(marks.sentences, positionMs);
-            const key = `${activeSegmentIndex}:${index}:${progress > 0.5 ? 'b' : 'a'}`;
-            if (key !== lastSentenceRef.current) {
-                lastSentenceRef.current = key;
-                setState({ segmentIndex: activeSegmentIndex, sentenceIndex: index, sentenceProgress: progress });
-            }
+            const words = marks.words && marks.words.length ? marks.words : null;
+            return {
+                segmentIndex: activeSegmentIndex,
+                sentenceIndex: index,
+                wordIndex: words ? findWord(words, positionMs) : -1,
+                sentenceProgress: progress,
+            };
+        };
+
+        const publish = (next: HighlightState | null) => {
+            const key = next
+                ? `${next.segmentIndex}:${next.sentenceIndex}:${next.wordIndex}:${next.sentenceProgress > 0.5 ? 'b' : 'a'}`
+                : '';
+            if (key === lastSentenceRef.current) return;
+            lastSentenceRef.current = key;
+            setState(next ?? IDLE);
         };
 
         if (isPlaying) {
+            const tick = () => {
+                rafRef.current = requestAnimationFrame(tick);
+                publish(compute());
+            };
             rafRef.current = requestAnimationFrame(tick);
         } else {
             // Paused/seeked: update once so the highlight still tracks manual position.
-            const audio = getAudio();
-            const marks = marksBySegment.get(activeSegmentIndex);
-            if (audio && marks && marks.sentences.length) {
-                const { index, progress } = findSentence(marks.sentences, audio.currentTime * 1000);
-                setState({ segmentIndex: activeSegmentIndex, sentenceIndex: index, sentenceProgress: progress });
-                lastSentenceRef.current = `${activeSegmentIndex}:${index}:${progress > 0.5 ? 'b' : 'a'}`;
-            } else {
-                setState(IDLE);
-            }
+            publish(compute());
         }
 
         return stop;

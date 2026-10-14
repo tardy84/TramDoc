@@ -80,10 +80,17 @@ timeline monotonic and ending at duration, timepoints → exact marks, subtitle 
 - Not verified: the google timepoints / minimax subtitle paths need live provider keys (no API calls were
   made, so no credits were spent).
 
+## Word-level highlight (same PR)
+
+When the provider returned real word timings (`source: provider-subtitle`, i.e. MiniMax), the payload carries
+`marks.words` and the reader highlights **the word** being spoken instead of the whole sentence; tapping a word
+seeks to that word, tapping a sentence (estimated timeline) seeks to the sentence start. `useSentenceHighlight`
+exposes `wordIndex` (−1 when only an estimated sentence timeline exists) and keeps the previous word highlighted
+during natural pauses instead of jumping ahead.
+
 ## Next (not in this slice)
 
-1. Word-level highlight using provider `words` (minimax subtitle already parsed into the payload).
-2. Prefetch the next segments' audio while one plays (Speechify's `chunkIndex` pattern) to cut the
+1. Prefetch the next segments' audio while one plays (Speechify's `chunkIndex` pattern) to cut the
    "đang tạo audio" wait on long chapters.
-3. Surface `hintsStale` in the UI as a "tạo lại audio cho khớp giọng đọc" action.
-4. Character/cost metering per book before generating a full-book job.
+2. Surface `hintsStale` in the UI as a "tạo lại audio cho khớp giọng đọc" action.
+3. Character/cost metering per book before generating a full-book job.
