@@ -15,6 +15,13 @@ import { GrokTTSService } from '../services/grokTTS.js';
 import { MINIMAX_NATURAL_PROFILE_ID, isSupportedGrokVoice, resolveTtsVoice, ResolvedTtsVoice } from '../services/ttsVoiceCatalog.js';
 import { renderTtsText } from '../services/ttsTextRenderer.js';
 import {
+    isUsableMarks,
+    estimateSentenceMarks,
+    type SegmentMarks,
+} from '../services/ttsAlignment.js';
+import { trySynthesizeWithTiming, TIMING_CAPABLE_PROVIDERS } from '../services/ttsTiming.js';
+import { probeDurationMs } from '../services/audioDuration.js';
+import {
     cancelTtsBookJob,
     createTtsBookJob,
     getTtsBookJob,
@@ -232,8 +239,11 @@ async function writeAudioMetadata(
     requestVoice?: string,
     providerVoiceId?: string,
     quality?: OfflineTtsQuality,
-    expressive = false
+    expressive = false,
+    receivedMarks?: { marks: SegmentMarks | null; provider: string } | null
 ): Promise<void> {
+    const existing = await readAudioMetadata(metadataPath);
+    const marks = receivedMarks?.marks ?? existing?.marks ?? null;
     await fs.writeFile(metadataPath, JSON.stringify({
         contentHash: getSegmentContentHash(segment, cacheVoice),
         orderIndex: segment.orderIndex,
@@ -247,8 +257,70 @@ async function writeAudioMetadata(
         providerVoiceId: providerVoiceId ?? null,
         quality: quality ?? null,
         expressive,
+        // Sentence timing for reader highlighting. `marksSource` tells the client
+        // whether the timeline is exact (provider) or derived (estimated).
+        marks,
+        marksSource: marks?.source ?? receivedMarks?.provider ?? null,
+        durationMs: marks?.durationMs ?? existing?.durationMs ?? null,
+        hintsHash: getSegmentHintsHash(segment),
         generatedAt: new Date().toISOString(),
     }, null, 2));
+}
+
+function getSegmentHintsHash(segment: Pick<SegmentForAudioCache, 'ttsHints'>): string | null {
+    const raw = (segment as { ttsHints?: string | null }).ttsHints;
+    if (raw === undefined || raw === null || raw === '') return null;
+    return crypto.createHash('sha256').update(String(raw)).digest('hex').slice(0, 16);
+}
+
+interface StoredAudioMetadata {
+    marks?: SegmentMarks | null;
+    marksSource?: string | null;
+    durationMs?: number | null;
+    hintsHash?: string | null;
+    contentHash?: string;
+}
+
+async function readAudioMetadata(metadataPath: string): Promise<StoredAudioMetadata | null> {
+    try {
+        const raw = await fs.readFile(metadataPath, 'utf8');
+        const parsed = JSON.parse(raw) as StoredAudioMetadata;
+        return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Marks for one cached segment: reuse stored marks, otherwise build an estimated
+ * timeline from the real audio duration and persist it so offline playback and
+ * later requests get highlighting without re-probing.
+ */
+async function ensureSegmentMarks(
+    filePath: string,
+    metadataPath: string,
+    segment: SegmentForAudioCache,
+    content: string,
+    cacheVoice: string
+): Promise<{ marks: SegmentMarks | null; source: string | null; durationMs: number | null }> {
+    const existing = await readAudioMetadata(metadataPath);
+    if (existing && isUsableMarks(existing.marks ?? undefined)) {
+        return {
+            marks: existing.marks as SegmentMarks,
+            source: existing.marksSource ?? (existing.marks as SegmentMarks).source,
+            durationMs: existing.durationMs ?? (existing.marks as SegmentMarks).durationMs,
+        };
+    }
+
+    const durationMs = await probeDurationMs(filePath);
+    if (!durationMs) return { marks: null, source: null, durationMs: null };
+
+    const marks = estimateSentenceMarks(content, durationMs);
+    await writeAudioMetadata(metadataPath, segment, cacheVoice, undefined, undefined, undefined, false, {
+        marks,
+        provider: marks.source,
+    });
+    return { marks, source: marks.source, durationMs };
 }
 
 function parseExpressiveFromFileVoice(voice: string): boolean {
@@ -571,6 +643,10 @@ async function generateSegment(bookId: number, chapterId: number, segmentIndex: 
         const ttsService = selectTtsService(resolved.provider);
 
         let buffer: Buffer | null = null;
+        let receivedMarks: { marks: SegmentMarks | null; provider: string } | null = null;
+        const synthOptions = quality && providerSupportsOfflineBitrate(resolved.provider)
+            ? { bitrate: OFFLINE_TTS_BITRATES[quality] }
+            : undefined;
         const maxAttempts = resolved.provider === 'vbee' ? 1 : TTS_GENERATION_MAX_ATTEMPTS;
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
             try {
@@ -579,13 +655,29 @@ async function generateSegment(bookId: number, chapterId: number, segmentIndex: 
                 const providerVoiceArg = resolved.provider === 'minimax'
                     ? resolved.providerVoiceId
                     : resolved.providerVoiceId;
+
+                // Providers with a native timing path (google marks, minimax subtitle)
+                // return audio AND sentence marks from this single call — no extra synthesis.
+                if (TIMING_CAPABLE_PROVIDERS.has(resolved.provider)) {
+                    const timed = await trySynthesizeWithTiming(
+                        resolved.provider,
+                        rendered.text,
+                        segment.role as any,
+                        providerVoiceArg,
+                        synthOptions
+                    );
+                    if (timed) {
+                        buffer = timed.buffer;
+                        receivedMarks = { marks: timed.marks, provider: timed.marks ? 'provider' : 'pending' };
+                        break;
+                    }
+                }
+
                 buffer = await ttsService.synthesize(
                     rendered.text,
                     segment.role as any,
                     providerVoiceArg,
-                    quality && providerSupportsOfflineBitrate(resolved.provider)
-                        ? { bitrate: OFFLINE_TTS_BITRATES[quality] }
-                        : undefined
+                    synthOptions
                 );
                 break;
             } catch (error) {
@@ -599,6 +691,29 @@ async function generateSegment(bookId: number, chapterId: number, segmentIndex: 
 
         await fs.mkdir(audioDir, { recursive: true });
         await fs.writeFile(filePath, buffer);
+
+        // Attach sentence timing: provider marks when they line up with the text we
+        // render, otherwise an estimated timeline over the real audio duration.
+        const spokenMatchesContent = rendered.text.trim() === segment.content.trim();
+        const providerMarks = spokenMatchesContent && isUsableMarks(receivedMarks?.marks ?? undefined)
+            ? (receivedMarks!.marks as SegmentMarks)
+            : null;
+        const probedDurationMs = await probeDurationMs(filePath);
+        let finalMarks: { marks: SegmentMarks | null; provider: string } | null = null;
+        if (providerMarks && probedDurationMs) {
+            const last = providerMarks.sentences[providerMarks.sentences.length - 1];
+            if (last && providerMarks.durationMs !== probedDurationMs) {
+                last.endMs = Math.max(last.startMs + 1, probedDurationMs);
+                providerMarks.durationMs = probedDurationMs;
+            }
+            finalMarks = { marks: providerMarks, provider: providerMarks.source };
+        } else if (probedDurationMs) {
+            finalMarks = {
+                marks: estimateSentenceMarks(segment.content, probedDurationMs),
+                provider: 'estimated',
+            };
+        }
+
         await writeAudioMetadata(
             metadataPath,
             segment,
@@ -606,9 +721,10 @@ async function generateSegment(bookId: number, chapterId: number, segmentIndex: 
             resolved.requestVoice,
             resolved.providerVoiceId,
             quality,
-            expressive
+            expressive,
+            finalMarks
         );
-        console.log(`[Audio] ✅ Generated: ${fileName}`);
+        console.log(`[Audio] ✅ Generated: ${fileName}${finalMarks ? ` (marks: ${finalMarks.provider})` : ''}`);
         return true;
     } catch (error) {
         console.error(`[Audio] ❌ Failed to generate ${fileName}: ${getSafeErrorMessage(error)}`);
@@ -873,6 +989,7 @@ router.get('/books/:bookId/chapters/:chapterId/tts/status', authenticateJWT, asy
         let cached = 0;
         let stale = 0;
         let missing = 0;
+        let hintsStale = 0;
 
         for (let i = 0; i < chapter.segments.length; i++) {
             const segment = chapter.segments[i];
@@ -884,6 +1001,13 @@ router.get('/books/:bookId/chapters/:chapterId/tts/status', authenticateJWT, asy
             const identity = buildSegmentAudioIdentity(voice, segment, undefined, expressive);
             if (await isSegmentAudioCached(filePath, metadataPath, segment, identity.fileCacheVoice)) {
                 cached++;
+                // Audio is reused, but the prosody hints it was generated with may have
+                // changed (tone/pace/pitch). Report it instead of silently playing stale audio.
+                const metadata = await readAudioMetadata(metadataPath);
+                const currentHintsHash = getSegmentHintsHash(segment);
+                if (metadata && currentHintsHash && metadata.hintsHash && metadata.hintsHash !== currentHintsHash) {
+                    hintsStale++;
+                }
             } else if (await doesFileExist(filePath)) {
                 stale++;
             } else {
@@ -891,9 +1015,96 @@ router.get('/books/:bookId/chapters/:chapterId/tts/status', authenticateJWT, asy
             }
         }
 
-        return res.json({ total: chapter.segments.length, cached, stale, missing });
+        return res.json({ total: chapter.segments.length, cached, stale, missing, hintsStale });
     } catch (error: any) {
         console.error('Error reading TTS status:', getSafeErrorMessage(error));
+        return res.status(500).json({ error: error.message });
+    }
+});
+
+// Sentence timing marks for reader highlighting (chapter × voice).
+// Providers with native timing (google marks, minimax subtitle) store exact marks
+// at generation time; everything else gets an estimated timeline from the real
+// audio duration. Marks are cached in the audio sidecar so offline playback works.
+router.get('/books/:bookId/chapters/:chapterId/tts/marks', authenticateJWT, async (req: AuthRequest, res: Response) => {
+    try {
+        const parsedBookId = parsePositiveInt(req.params.bookId);
+        const parsedChapterId = parsePositiveInt(req.params.chapterId);
+        if (!parsedBookId || !parsedChapterId) {
+            return res.status(400).json({ error: 'Book hoặc chapter ID không hợp lệ' });
+        }
+
+        const voice = req.query.voice;
+        if (!isSupportedVoiceRequest(voice)) {
+            return res.status(400).json({ error: getVoiceValidationError(voice) || 'Giọng đọc không hợp lệ' });
+        }
+        if (hasInvalidOfflineTtsQuality(req.query.quality)) return res.status(400).json({ error: 'Chất lượng offline không hợp lệ' });
+        const quality = parseOfflineTtsQuality(req.query.quality);
+        const expressive = parseExpressiveFlag(req.query.expressive);
+
+        const chapter = await prisma.chapter.findFirst({
+            where: { id: parsedChapterId, bookId: parsedBookId, book: { userId: req.user.id } },
+            include: { segments: { orderBy: { orderIndex: 'asc' } } },
+        });
+        if (!chapter) return res.status(404).json({ error: 'Chapter not found' });
+
+        const entries: Array<{
+            orderIndex: number;
+            segmentId: number;
+            provider: string;
+            timingCapable: boolean;
+            status: 'ready' | 'missing' | 'unknown';
+            source: string | null;
+            durationMs: number | null;
+            marks: SegmentMarks | null;
+        }> = [];
+
+        for (const segment of chapter.segments) {
+            if (!isSpeakableSegmentContent(segment.content)) continue;
+            const identity = buildSegmentAudioIdentity(voice, segment, quality, expressive);
+            const fileName = buildAudioFileName(parsedBookId, parsedChapterId, identity.fileCacheVoice, segment.orderIndex);
+            const filePath = resolveAudioPath(fileName);
+            const metadataPath = resolveAudioMetadataPath(fileName);
+            const provider = identity.resolved.provider;
+            if (!filePath || !metadataPath) continue;
+
+            if (!(await doesFileExist(filePath))) {
+                entries.push({
+                    orderIndex: segment.orderIndex,
+                    segmentId: segment.id,
+                    provider,
+                    timingCapable: TIMING_CAPABLE_PROVIDERS.has(provider),
+                    status: 'missing',
+                    source: null,
+                    durationMs: null,
+                    marks: null,
+                });
+                continue;
+            }
+
+            const { marks, source, durationMs } = await ensureSegmentMarks(
+                filePath,
+                metadataPath,
+                segment,
+                segment.content,
+                identity.fileCacheVoice
+            );
+
+            entries.push({
+                orderIndex: segment.orderIndex,
+                segmentId: segment.id,
+                provider,
+                timingCapable: TIMING_CAPABLE_PROVIDERS.has(provider),
+                status: marks ? 'ready' : 'unknown',
+                source,
+                durationMs,
+                marks,
+            });
+        }
+
+        return res.json({ chapterId: parsedChapterId, voice, quality: quality ?? null, expressive, segments: entries });
+    } catch (error: any) {
+        console.error('Error building TTS marks:', getSafeErrorMessage(error));
         return res.status(500).json({ error: error.message });
     }
 });

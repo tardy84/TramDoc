@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef, type ReactNode } from 'react';
 import { getGlobalAudio, setGlobalAudio } from '../services/audioPlayer';
 
 // Sub-components
@@ -15,7 +15,8 @@ import { useReaderAudio } from './Reader/useReaderAudio';
 import { useReaderProgress } from './Reader/useReaderProgress';
 
 // Local database
-import { getBook, getBookmarks, createBookmark, deleteBookmark as deleteBookmarkApi } from '../services/apiService';
+import { getBook, getBookmarks, createBookmark, deleteBookmark as deleteBookmarkApi, getChapterTtsMarks, type TtsChapterMarksEntry } from '../services/apiService';
+import { useSentenceHighlight, type SegmentMarks as SentenceMarks } from './Reader/useSentenceHighlight';
 import { DEFAULT_TTS_VOICE, normalizeEnabledTtsVoice, resolveApiUrl } from '../constants';
 import { getErrorMessage } from '../utils/errors';
 
@@ -28,7 +29,8 @@ const THEMES: Record<ThemeMode, ThemeStyles> = {
         header: 'bg-[#0f172a]/80 backdrop-blur-xl border-white/5',
         btn: 'bg-white/5 border-white/10 text-white/70 hover:text-white',
         backBtn: 'bg-white/10 text-white/70 group-hover:bg-white/20',
-        paper: 'bg-[#1e293b]'
+        paper: 'bg-[#1e293b]',
+        sentenceActive: 'bg-indigo-400/30'
     },
     sepia: {
         container: 'bg-[#f4ecd8]',
@@ -38,7 +40,8 @@ const THEMES: Record<ThemeMode, ThemeStyles> = {
         header: 'bg-[#f4ecd8]/90 backdrop-blur-md border-[#d3c2a3]/50',
         btn: 'bg-[#5b4636]/10 border-[#5b4636]/20 text-[#433429] hover:bg-[#5b4636]/20',
         backBtn: 'bg-amber-900/10 text-amber-900 group-hover:bg-amber-900/20',
-        paper: 'bg-[#fdf6e3]'
+        paper: 'bg-[#fdf6e3]',
+        sentenceActive: 'bg-[#e6d5ac]'
     },
     emerald: {
         container: 'bg-[#064e3b]',
@@ -48,7 +51,8 @@ const THEMES: Record<ThemeMode, ThemeStyles> = {
         header: 'bg-[#064e3b]/80 backdrop-blur-xl border-white/5',
         btn: 'bg-white/5 border-white/10 text-white/70 hover:text-white',
         backBtn: 'bg-white/10 text-white/70 group-hover:bg-white/20',
-        paper: 'bg-[#065f46]'
+        paper: 'bg-[#065f46]',
+        sentenceActive: 'bg-emerald-300/30'
     },
     oled: {
         container: 'bg-black',
@@ -58,7 +62,8 @@ const THEMES: Record<ThemeMode, ThemeStyles> = {
         header: 'bg-black/80 backdrop-blur-xl border-zinc-800',
         btn: 'bg-zinc-800 border-zinc-700 text-gray-400 hover:text-white',
         backBtn: 'bg-white/10 text-white/70 group-hover:bg-white/20',
-        paper: 'bg-black'
+        paper: 'bg-black',
+        sentenceActive: 'bg-white/20'
     },
     dark: {
         container: 'bg-[#121212]',
@@ -68,7 +73,8 @@ const THEMES: Record<ThemeMode, ThemeStyles> = {
         header: 'bg-[#121212]/80 backdrop-blur-xl border-white/5',
         btn: 'bg-white/5 border-white/10 text-white/70 hover:text-white',
         backBtn: 'bg-white/10 text-white/70 group-hover:bg-white/20',
-        paper: 'bg-[#1e1e1e]'
+        paper: 'bg-[#1e1e1e]',
+        sentenceActive: 'bg-blue-400/25'
     }
 };
 
@@ -155,6 +161,107 @@ export default function BookReader({ bookId, onClose }: BookReaderProps) {
         setGlobalAudio
     });
     const { isPlaying, setIsPlaying } = audio;
+
+    // Sentence-level follow-along highlighting (marks come from the audio sidecar:
+    // exact for google/minimax, estimated for the other providers we already use).
+    const [sentenceMarks, setSentenceMarks] = useState<Map<number, SentenceMarks>>(new Map());
+    const [marksSource, setMarksSource] = useState<string | null>(null);
+    const marksCacheRef = useRef<Map<string, Map<number, SentenceMarks>>>(new Map());
+    const currentChapterForMarks = chapters[currentChapterIndex];
+
+    useEffect(() => {
+        if (!currentChapterForMarks) return;
+        const cacheKey = `${bookId}:${currentChapterForMarks.id}:${selectedVoice}:${expressiveTts ? 'ex1' : 'ex0'}`;
+        const cached = marksCacheRef.current.get(cacheKey);
+        if (cached) {
+            setSentenceMarks(cached);
+            return;
+        }
+
+        let cancelled = false;
+        (async () => {
+            try {
+                const entries: TtsChapterMarksEntry[] = await getChapterTtsMarks(
+                    bookId,
+                    currentChapterForMarks.id,
+                    selectedVoice,
+                    { expressive: expressiveTts }
+                );
+                const map = new Map<number, SentenceMarks>();
+                let source: string | null = null;
+                for (const entry of entries) {
+                    if (entry.marks && entry.marks.sentences?.length) {
+                        map.set(entry.orderIndex, entry.marks as SentenceMarks);
+                        source = source ?? entry.source;
+                    }
+                }
+                if (cancelled) return;
+                marksCacheRef.current.set(cacheKey, map);
+                setSentenceMarks(map);
+                setMarksSource(source);
+            } catch (e) {
+                if (!cancelled) {
+                    setSentenceMarks(new Map());
+                    setMarksSource(null);
+                }
+            }
+        })();
+
+        return () => { cancelled = true; };
+    }, [bookId, currentChapterForMarks, selectedVoice, expressiveTts]);
+
+    const highlight = useSentenceHighlight({
+        marksBySegment: sentenceMarks,
+        activeSegmentIndex: currentSegmentIndex,
+        isPlaying: isPlaying,
+        getAudio: getGlobalAudio,
+    });
+
+    const seekToSentence = useCallback((marks: SentenceMarks, sentenceIndex: number) => {
+        const element = getGlobalAudio();
+        const target = marks.sentences[sentenceIndex];
+        if (!element || !target) return;
+        try {
+            element.currentTime = Math.max(0, target.startMs / 1000);
+        } catch {
+            // Ignore seek errors on not-yet-loaded audio.
+        }
+    }, []);
+
+    /** Render a segment's text split by sentence marks so the spoken sentence can be highlighted. */
+    const renderSegmentContent = (segment: Segment, index: number) => {
+        const marks = sentenceMarks.get(index);
+        if (!marks || !marks.sentences.length || index !== currentSegmentIndex) {
+            return segment.content;
+        }
+
+        const nodes: ReactNode[] = [];
+        let cursor = 0;
+        marks.sentences.forEach((sentence, sentenceIndex) => {
+            if (sentence.charStart > cursor) {
+                nodes.push(<span key={`gap-${sentenceIndex}`}>{segment.content.slice(cursor, sentence.charStart)}</span>);
+            }
+            const isActive = highlight.segmentIndex === index && highlight.sentenceIndex === sentenceIndex;
+            nodes.push(
+                <span
+                    key={`sentence-${sentenceIndex}`}
+                    onClick={(event) => {
+                        event.stopPropagation();
+                        seekToSentence(marks, sentenceIndex);
+                    }}
+                    title={marks.source === 'estimated' ? 'Mốc thời gian ước lượng' : undefined}
+                    className={`rounded-md transition-colors duration-200 ${isActive ? `${currentThemeStyles.sentenceActive ?? 'bg-white/20'} shadow-sm` : ''}`}
+                >
+                    {segment.content.slice(sentence.charStart, sentence.charEnd)}
+                </span>
+            );
+            cursor = Math.max(cursor, sentence.charEnd);
+        });
+        if (cursor < segment.content.length) {
+            nodes.push(<span key="tail">{segment.content.slice(cursor)}</span>);
+        }
+        return nodes;
+    };
 
     useReaderProgress({
         bookId,
@@ -340,7 +447,10 @@ export default function BookReader({ bookId, onClose }: BookReaderProps) {
                             </div>
                         )}
 
-                        <div className={`rounded-3xl md:rounded-[40px] p-3 sm:p-5 md:p-16 shadow-2xl transition-all duration-700 ${currentThemeStyles.paper} paper-texture shadow-black/20 overflow-hidden`}>
+                        <div
+                            className={`rounded-3xl md:rounded-[40px] p-3 sm:p-5 md:p-16 shadow-2xl transition-all duration-700 ${currentThemeStyles.paper} paper-texture shadow-black/20 overflow-hidden`}
+                            title={marksSource ? `Mốc câu đang đọc: ${marksSource === 'estimated' ? 'ước lượng theo thời lượng audio' : 'chính xác từ nhà cung cấp'}` : undefined}
+                        >
                             <div className="space-y-0.5 text-left sm:text-justify leading-[1.72] md:leading-[2]">
                                 {currentChapter.segments.map((segment, index) => (
                                     <div
@@ -356,7 +466,7 @@ export default function BookReader({ bookId, onClose }: BookReaderProps) {
                                             className={`relative z-10 transition-all duration-500 ${fontFamily === 'bookerly' ? 'font-serif tracking-tight' : 'font-sans tracking-normal'} ${segment.role === 'heading' ? 'text-4xl md:text-6xl font-black uppercase tracking-widest leading-tight' : ''}`}
                                             style={{ fontSize: segment.role === 'heading' ? undefined : `${fontSize}px` }}
                                         >
-                                            {segment.content}
+                                            {renderSegmentContent(segment, index)}
                                         </p>
                                     </div>
                                 ))}

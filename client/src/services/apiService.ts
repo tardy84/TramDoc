@@ -173,6 +173,37 @@ export interface TtsBookCacheStatus {
     chapters: TtsBookCacheChapterStatus[];
 }
 
+export interface TtsSegmentMarks {
+    version: 1;
+    source: 'provider-timepoints' | 'provider-subtitle' | 'estimated';
+    durationMs: number;
+    sentences: Array<{ text: string; charStart: number; charEnd: number; startMs: number; endMs: number }>;
+}
+
+export interface TtsChapterMarksEntry {
+    orderIndex: number;
+    segmentId: number;
+    provider: string;
+    timingCapable: boolean;
+    status: 'ready' | 'missing' | 'unknown';
+    source: string | null;
+    durationMs: number | null;
+    marks: TtsSegmentMarks | null;
+}
+
+/** Sentence timing marks for one chapter + voice (reader highlighting). */
+export const getChapterTtsMarks = async (
+    bookId: number,
+    chapterId: number,
+    voice: string,
+    options: { quality?: OfflineTtsQuality; expressive?: boolean } = {}
+): Promise<TtsChapterMarksEntry[]> => {
+    const response = await api.get(`/books/${bookId}/chapters/${chapterId}/tts/marks`, {
+        params: { voice, quality: options.quality, expressive: options.expressive ? 1 : undefined },
+    });
+    return response.data?.segments ?? [];
+};
+
 export const startBookTtsJob = async (
     bookId: number,
     voice: string,
@@ -216,5 +247,6 @@ export default {
     startBookTtsJob,
     getBookTtsJob,
     cancelBookTtsJob,
-    getBookTtsStatus
+    getBookTtsStatus,
+    getChapterTtsMarks
 };
